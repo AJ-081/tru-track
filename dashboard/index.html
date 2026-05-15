@@ -116,6 +116,10 @@
       </div>
       <div class="topbar-right">
         <div class="session-info" id="session-info">No session selected</div>
+        <button class="topbar-btn" id="btn-csv"     onclick="exportCSV()"     disabled>↓ CSV</button>
+        <button class="topbar-btn" id="btn-geojson" onclick="exportGeoJSON()" disabled>↓ GeoJSON</button>
+        <button class="topbar-btn" id="btn-replay"  onclick="toggleReplay()"  disabled>▶ Replay</button>
+      </div>
       </div>
     </div>
 
@@ -134,6 +138,15 @@
           then restart the backend service.
         </p>
       </div>
+	<!-- Replay bar — shown only in replay mode -->
+      <div class="replay-bar" id="replay-bar">
+        <button class="replay-play-btn" id="replay-play-btn" onclick="replayPlayPause()">▶</button>
+        <input  class="replay-slider" type="range" id="replay-slider" min="0" value="0" oninput="replaySeek(this.value)">
+        <div    class="replay-time"   id="replay-time">0 / 0</div>
+      </div>
+    </div>
+
+  </main>
     </div>
 
   </main>

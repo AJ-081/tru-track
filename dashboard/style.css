@@ -326,3 +326,63 @@ select:last-child { margin-bottom: 0; }
   color: var(--text3);
   font-variant-numeric: tabular-nums;
 }
+
+/* ── Topbar buttons ──────────────────────────────────────────────────────────── */
+.topbar-btn {
+  background: var(--bg3);
+  border: 1px solid var(--border2);
+  border-radius: 6px;
+  padding: 5px 12px;
+  color: var(--text2);
+  font-size: 11px;
+  font-weight: 500;
+  cursor: pointer;
+  font-family: inherit;
+  white-space: nowrap;
+  transition: all 0.15s;
+}
+.topbar-btn:hover:not(:disabled)  { border-color: var(--blue); color: var(--text); }
+.topbar-btn:disabled { opacity: 0.35; cursor: not-allowed; }
+.topbar-btn.active   { background: var(--blue); border-color: var(--blue); color: #fff; }
+
+/* ── Replay scrubber ─────────────────────────────────────────────────────────── */
+.replay-bar {
+  position: absolute;
+  bottom: 0; left: 0; right: 0;
+  background: rgba(10,10,10,0.92);
+  border-top: 1px solid var(--border2);
+  padding: 10px 20px;
+  display: none;
+  align-items: center;
+  gap: 14px;
+  z-index: 10;
+}
+.replay-bar.visible { display: flex; }
+
+.replay-slider {
+  flex: 1;
+  accent-color: var(--blue);
+  cursor: pointer;
+}
+
+.replay-time {
+  font-size: 11px;
+  color: var(--text2);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  min-width: 80px;
+  text-align: right;
+}
+
+.replay-play-btn {
+  background: var(--blue);
+  border: none;
+  border-radius: 6px;
+  width: 28px; height: 28px;
+  color: #fff;
+  font-size: 12px;
+  cursor: pointer;
+  display: flex; align-items: center; justify-content: center;
+  flex-shrink: 0;
+}
+.replay-play-btn:hover { opacity: 0.85; }

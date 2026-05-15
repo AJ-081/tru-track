@@ -155,17 +155,20 @@ async function onSessionChange(sessionId) {
 
   if (!sessionId || !selectedDevice) return;
 
-  if (sessionId === "live") {
-    // Live mode
+if (sessionId === "live") {
+    setExportButtons(false);
+    stopReplay();
     document.getElementById("session-info").textContent = `LIVE — ${selectedDevice}`;
     joinDeviceRoom(selectedDevice);
     startPolling(selectedDevice);
   } else {
-    // Historical replay mode — load stored track
+    setExportButtons(true);
+    stopReplay();
     document.getElementById("session-info").textContent = `Session: ${sessionId.slice(-16)}`;
     setConnectionStatus("offline", "Historical session");
     await loadHistoricalTrack(sessionId);
-    startPolling(selectedDevice);  // still poll health for device status
+    await loadReplayData(sessionId);
+    startPolling(selectedDevice);
   }
 }
 
@@ -374,4 +377,158 @@ function setConnectionStatus(state, label) {
 function clearMapTracks() {
   if (gnssPolyline) gnssPolyline.setPath([]);
   if (eskfPolyline) eskfPolyline.setPath([]);
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+// DAY 13 — EXPORT + REPLAY
+// ══════════════════════════════════════════════════════════════════════════════
+
+// ── Export CSV ────────────────────────────────────────────────────────────────
+async function exportCSV() {
+  if (!selectedDevice || !selectedSession || selectedSession === "live") return;
+  const url = `/api/v1/session/export?device_id=${encodeURIComponent(selectedDevice)}&session_id=${encodeURIComponent(selectedSession)}`;
+  await triggerDownload(url);
+}
+
+// ── Export GeoJSON ────────────────────────────────────────────────────────────
+async function exportGeoJSON() {
+  if (!selectedDevice || !selectedSession || selectedSession === "live") return;
+  const url = `/api/v1/session/geojson?device_id=${encodeURIComponent(selectedDevice)}&session_id=${encodeURIComponent(selectedSession)}`;
+  await triggerDownload(url);
+}
+
+async function triggerDownload(url) {
+  try {
+    const res = await AUTH.apiFetch(url);
+    if (!res || !res.ok) { alert("Export failed — no data for this session."); return; }
+    const blob = await res.blob();
+    const disp = res.headers.get("Content-Disposition") || "";
+    const match = disp.match(/filename=([^;]+)/);
+    const fname = match ? match[1].trim() : "tru-track-export";
+    const a = document.createElement("a");
+    a.href     = URL.createObjectURL(blob);
+    a.download = fname;
+    a.click();
+    URL.revokeObjectURL(a.href);
+  } catch { alert("Export failed — check connection."); }
+}
+
+// ── Replay ────────────────────────────────────────────────────────────────────
+let replayGnss   = [];
+let replayEskf   = [];
+let replayIdx    = 0;
+let replayTimer  = null;
+let replayActive = false;
+
+async function loadReplayData(sessionId) {
+  if (!mapReady) return;
+  try {
+    const [gr, er] = await Promise.all([
+      AUTH.apiFetch(`/api/v1/gnss/track/${selectedDevice}?session_id=${encodeURIComponent(sessionId)}`),
+      AUTH.apiFetch(`/api/v1/eskf/track/${selectedDevice}?session_id=${encodeURIComponent(sessionId)}`),
+    ]);
+    replayGnss = gr && gr.ok ? await gr.json() : [];
+    replayEskf = er && er.ok ? await er.json() : [];
+    replayIdx  = 0;
+
+    const slider = document.getElementById("replay-slider");
+    slider.max   = Math.max(replayGnss.length, replayEskf.length);
+    slider.value = 0;
+    updateReplayTime(0);
+
+    // Draw full dim track as background
+    if (replayGnss.length)
+      gnssPolyline.setPath(replayGnss.map(p => ({ lat: p.lat, lng: p.lon })));
+    if (replayEskf.length)
+      eskfPolyline.setPath(replayEskf.map(p => ({ lat: p.lat, lng: p.lon })));
+
+    // Fit bounds
+    const all = [...replayGnss, ...replayEskf];
+    if (all.length) {
+      const bounds = new google.maps.LatLngBounds();
+      all.forEach(p => bounds.extend({ lat: p.lat, lng: p.lon }));
+      gmap.fitBounds(bounds);
+    }
+
+    document.getElementById("pkt-counter").textContent =
+      `${replayGnss.length} GNSS · ${replayEskf.length} ESKF`;
+  } catch { /* silent */ }
+}
+
+function toggleReplay() {
+  if (!replayGnss.length && !replayEskf.length) return;
+  replayActive = !replayActive;
+  const btn = document.getElementById("btn-replay");
+  btn.classList.toggle("active", replayActive);
+  btn.textContent = replayActive ? "⏹ Stop" : "▶ Replay";
+
+  if (replayActive) {
+    replayIdx = 0;
+    document.getElementById("replay-bar").classList.add("visible");
+    replayStep();
+  } else {
+    stopReplay();
+  }
+}
+
+function replayStep() {
+  const max = Math.max(replayGnss.length, replayEskf.length);
+  if (replayIdx >= max) { stopReplay(); return; }
+
+  if (mapReady) {
+    if (replayIdx < replayGnss.length)
+      gnssPolyline.setPath(replayGnss.slice(0, replayIdx + 1).map(p => ({ lat: p.lat, lng: p.lon })));
+    if (replayIdx < replayEskf.length)
+      eskfPolyline.setPath(replayEskf.slice(0, replayIdx + 1).map(p => ({ lat: p.lat, lng: p.lon })));
+  }
+
+  document.getElementById("replay-slider").value = replayIdx;
+  updateReplayTime(replayIdx);
+  replayIdx++;
+  replayTimer = setTimeout(replayStep, 80);  // ~12 frames/sec
+}
+
+function replaySeek(val) {
+  replayIdx = parseInt(val);
+  if (mapReady) {
+    if (replayGnss.length)
+      gnssPolyline.setPath(replayGnss.slice(0, replayIdx + 1).map(p => ({ lat: p.lat, lng: p.lon })));
+    if (replayEskf.length)
+      eskfPolyline.setPath(replayEskf.slice(0, replayIdx + 1).map(p => ({ lat: p.lat, lng: p.lon })));
+  }
+  updateReplayTime(replayIdx);
+}
+
+function replayPlayPause() {
+  if (replayTimer) {
+    clearTimeout(replayTimer);
+    replayTimer = null;
+    document.getElementById("replay-play-btn").textContent = "▶";
+  } else {
+    document.getElementById("replay-play-btn").textContent = "⏸";
+    replayStep();
+  }
+}
+
+function stopReplay() {
+  clearTimeout(replayTimer);
+  replayTimer  = null;
+  replayActive = false;
+  const btn = document.getElementById("btn-replay");
+  btn.classList.remove("active");
+  btn.textContent = "▶ Replay";
+  document.getElementById("replay-bar").classList.remove("visible");
+  document.getElementById("replay-play-btn").textContent = "▶";
+}
+
+function updateReplayTime(idx) {
+  const max = Math.max(replayGnss.length, replayEskf.length);
+  document.getElementById("replay-time").textContent = `${idx} / ${max}`;
+}
+
+// ── Enable/disable export buttons based on session type ───────────────────────
+function setExportButtons(enabled) {
+  ["btn-csv", "btn-geojson", "btn-replay"].forEach(id => {
+    document.getElementById(id).disabled = !enabled;
+  });
 }
