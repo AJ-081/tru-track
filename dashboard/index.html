@@ -1,0 +1,149 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>TRU-TRACK · Dashboard</title>
+<link rel="stylesheet" href="/style.css">
+</head>
+<body>
+<div class="app">
+
+  <!-- ── Sidebar ──────────────────────────────────────────────────────────── -->
+  <aside class="sidebar">
+
+    <div class="sidebar-logo">
+      <div class="logo-icon">TT</div>
+      <div class="logo-text">
+        <h1>TRU-TRACK</h1>
+        <p>Navigation Platform</p>
+      </div>
+    </div>
+
+    <!-- Device + Session -->
+    <div class="s-section">
+      <div class="s-label">Device</div>
+      <select id="device-select" onchange="onDeviceChange(this.value)">
+        <option value="">Loading devices...</option>
+      </select>
+
+      <div class="s-label">Session</div>
+      <select id="session-select" onchange="onSessionChange(this.value)" disabled>
+        <option value="">Select a device first</option>
+      </select>
+    </div>
+
+    <!-- Health -->
+    <div class="s-section">
+      <div class="s-label">Health</div>
+
+      <div class="health-item">
+        <div class="health-row">
+          <span class="health-name">GNSS Quality</span>
+          <span class="health-val" id="h-gnss-val">—</span>
+        </div>
+        <div class="health-bar-track">
+          <div class="health-bar-fill" id="h-gnss-bar"></div>
+        </div>
+        <div class="health-sub" id="h-gnss-sub">No device selected</div>
+      </div>
+
+      <div class="health-item">
+        <div class="health-row">
+          <span class="health-name">WiFi Signal</span>
+          <span class="health-val" id="h-wifi-val">—</span>
+        </div>
+        <div class="health-bar-track">
+          <div class="health-bar-fill" id="h-wifi-bar"></div>
+        </div>
+        <div class="health-sub" id="h-wifi-sub">Pending</div>
+      </div>
+
+      <div class="health-item">
+        <div class="health-row">
+          <span class="health-name">ESKF Filter</span>
+          <span class="health-val" id="h-eskf-val">—</span>
+        </div>
+        <div class="health-bar-track">
+          <div class="health-bar-fill" id="h-eskf-bar"></div>
+        </div>
+        <div class="health-sub" id="h-eskf-sub">Pending</div>
+      </div>
+
+      <div class="health-item">
+        <div class="health-row">
+          <span class="health-name">Battery</span>
+          <span class="health-val" id="h-batt-val">—</span>
+        </div>
+        <div class="health-bar-track">
+          <div class="health-bar-fill" id="h-batt-bar"></div>
+        </div>
+        <div class="health-sub" id="h-batt-sub">N/A — IC pending</div>
+      </div>
+    </div>
+
+    <!-- Alerts -->
+    <div class="s-section">
+      <div class="s-label">Alerts</div>
+      <div class="alert-list" id="alert-list">
+        <div class="no-alerts">No device selected</div>
+      </div>
+    </div>
+
+    <!-- User footer -->
+    <div class="sidebar-footer">
+      <div class="user-info">
+        <div class="user-name" id="user-name">—</div>
+        <div class="user-role" id="user-role">—</div>
+      </div>
+      <button class="logout-btn" onclick="AUTH.logout()">Logout</button>
+    </div>
+
+  </aside>
+
+  <!-- ── Main ──────────────────────────────────────────────────────────────── -->
+  <main class="main">
+
+    <!-- Top bar -->
+    <div class="topbar">
+      <div class="topbar-left">
+        <div class="status-chip">
+          <div class="status-dot offline" id="conn-dot"></div>
+          <span id="conn-label">Not connected</span>
+        </div>
+        <div class="stale-badge" id="stale-badge">⚠ STALE DATA</div>
+        <div class="pkt-counter" id="pkt-counter"></div>
+      </div>
+      <div class="topbar-right">
+        <div class="session-info" id="session-info">No session selected</div>
+      </div>
+    </div>
+
+    <!-- Map -->
+    <div class="map-wrap">
+      <div id="map"></div>
+
+      <!-- Shown when no Google Maps key configured -->
+      <div class="map-placeholder" id="map-placeholder">
+        <div class="map-placeholder-icon">🗺</div>
+        <h3>Map not configured</h3>
+        <p>
+          Add your Google Maps API key to<br>
+          <code>/etc/tru-track/secrets.env</code><br>
+          as <code>GOOGLE_MAPS_KEY=your_key_here</code><br>
+          then restart the backend service.
+        </p>
+      </div>
+    </div>
+
+  </main>
+</div>
+
+<!-- Socket.IO client (matches Flask-SocketIO 5.x) -->
+<script src="https://cdn.socket.io/4.7.2/socket.io.min.js"></script>
+<!-- Auth module -->
+<script src="/auth.js"></script>
+<!-- Dashboard logic -->
+<script src="/app.js"></script>
+</body>
+</html>
