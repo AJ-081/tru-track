@@ -488,3 +488,33 @@ function setExportButtons(enabled) {
     if (el) el.disabled = !enabled;
   });
 }
+
+// ── Server status panel ───────────────────────────────────────────────────────
+const SRV_LABELS = {
+  healthy:       "Healthy",
+  warning:       "Warning",
+  major_warning: "Major Warning",
+  critical:      "Critical",
+};
+
+async function updateServerStatus() {
+  try {
+    const res = await AUTH.apiFetch("/api/v1/server/health");
+    if (!res || !res.ok) return;
+    const d = await res.json();
+
+    const dot   = document.getElementById("srv-dot");
+    const label = document.getElementById("srv-label");
+    dot.className   = "srv-dot " + (d.status_level || "");
+    label.textContent = SRV_LABELS[d.status_level] || d.status_level;
+
+    document.getElementById("srv-cpu").textContent  = d.cpu_percent.toFixed(1) + "%";
+    document.getElementById("srv-ram").textContent  = d.memory.percent.toFixed(1) + "%  (" + d.memory.used_gb + "/" + d.memory.total_gb + " GB)";
+    document.getElementById("srv-disk").textContent = d.disk.percent.toFixed(1) + "%  (" + d.disk.used_gb + "/" + d.disk.total_gb + " GB)";
+    document.getElementById("srv-svcs").textContent = d.services_up + "/" + d.services_total + " running";
+  } catch { /* silent */ }
+}
+
+// Poll server status every 15 seconds
+updateServerStatus();
+setInterval(updateServerStatus, 15000);

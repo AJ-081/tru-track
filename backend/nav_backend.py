@@ -123,26 +123,58 @@ def maps_key():
     return jsonify({"key": os.environ.get("GOOGLE_MAPS_KEY", "")})
 
 # ── Server health (public — used by monitoring) ───────────────────────────────
+
 @app.route("/api/v1/server/health")
 def server_health():
+    import subprocess as _sp
     mem  = psutil.virtual_memory()
     disk = psutil.disk_usage("/")
+    cpu  = psutil.cpu_percent(interval=0.2)
+
+    # Check all services
+    svcs = ["mongod", "mosquitto", "nginx",
+            "tru-track-ingest", "tru-track-backend"]
+    svc_status = {}
+    for svc in svcs:
+        try:
+            r = _sp.run(["systemctl", "is-active", svc],
+                        capture_output=True, text=True, timeout=2)
+            svc_status[svc] = (r.stdout.strip() == "active")
+        except Exception:
+            svc_status[svc] = False
+
+    core = ["mongod", "tru-track-ingest", "tru-track-backend"]
+    core_down = [s for s in core if not svc_status.get(s)]
+    any_down  = [s for s in svcs  if not svc_status.get(s)]
+
+    if core_down or disk.percent > 90:
+        level = "critical"
+    elif cpu > 85 or mem.percent > 90 or disk.percent > 85 or (any_down and not core_down):
+        level = "major_warning"
+    elif cpu > 70 or mem.percent > 80 or disk.percent > 75:
+        level = "warning"
+    else:
+        level = "healthy"
+
     return jsonify({
-        "status":        "ok",
-        "cpu_percent":   psutil.cpu_percent(interval=0.2),
+        "status":          "ok",
+        "status_level":    level,
+        "cpu_percent":     cpu,
         "memory": {
-            "used_gb":   round(mem.used  / 1e9, 2),
-            "total_gb":  round(mem.total / 1e9, 2),
-            "percent":   mem.percent,
+            "used_gb":     round(mem.used  / 1e9, 2),
+            "total_gb":    round(mem.total / 1e9, 2),
+            "percent":     mem.percent,
         },
         "disk": {
-            "used_gb":   round(disk.used  / 1e9, 2),
-            "total_gb":  round(disk.total / 1e9, 2),
-            "percent":   disk.percent,
+            "used_gb":     round(disk.used  / 1e9, 2),
+            "total_gb":    round(disk.total / 1e9, 2),
+            "percent":     disk.percent,
         },
-        "uptime_hours":  round((time.time() -
-                                psutil.boot_time()) / 3600, 1),
-        "timestamp":     datetime.utcnow().isoformat(),
+        "uptime_hours":    round((time.time() - psutil.boot_time()) / 3600, 1),
+        "services":        svc_status,
+        "services_up":     sum(svc_status.values()),
+        "services_total":  len(svcs),
+        "timestamp":       datetime.utcnow().isoformat(),
     })
 
 # ── Static dashboard ──────────────────────────────────────────────────────────
