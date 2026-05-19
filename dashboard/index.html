@@ -5,6 +5,8 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>TRU-TRACK · Dashboard</title>
 <link rel="stylesheet" href="/style.css">
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 </head>
 <body>
 <div class="app">
@@ -120,25 +122,13 @@
         <button class="topbar-btn" id="btn-geojson" onclick="exportGeoJSON()" disabled>↓ GeoJSON</button>
         <button class="topbar-btn" id="btn-replay"  onclick="toggleReplay()"  disabled>▶ Replay</button>
       </div>
-      </div>
     </div>
 
     <!-- Map -->
     <div class="map-wrap">
       <div id="map"></div>
 
-      <!-- Shown when no Google Maps key configured -->
-      <div class="map-placeholder" id="map-placeholder">
-        <div class="map-placeholder-icon">🗺</div>
-        <h3>Map not configured</h3>
-        <p>
-          Add your Google Maps API key to<br>
-          <code>/etc/tru-track/secrets.env</code><br>
-          as <code>GOOGLE_MAPS_KEY=your_key_here</code><br>
-          then restart the backend service.
-        </p>
-      </div>
-	<!-- Replay bar — shown only in replay mode -->
+      <!-- Replay bar -->
       <div class="replay-bar" id="replay-bar">
         <button class="replay-play-btn" id="replay-play-btn" onclick="replayPlayPause()">▶</button>
         <input  class="replay-slider" type="range" id="replay-slider" min="0" value="0" oninput="replaySeek(this.value)">
@@ -147,12 +137,9 @@
     </div>
 
   </main>
-    </div>
-
-  </main>
 </div>
 
-<!-- Socket.IO client (matches Flask-SocketIO 5.x) -->
+<!-- Socket.IO -->
 <script src="https://cdn.socket.io/4.7.2/socket.io.min.js"></script>
 <!-- Auth module -->
 <script src="/auth.js"></script>

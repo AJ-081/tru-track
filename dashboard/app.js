@@ -1,5 +1,5 @@
 // TRU-TRACK Dashboard — app.js
-// All real data. Zero simulation. Zero random values.
+// Leaflet maps. All real data. Zero simulation.
 
 // ── Auth guard ────────────────────────────────────────────────────────────────
 AUTH.requireLogin();
@@ -16,53 +16,48 @@ let lastPacketAt     = null;
 let packetCount      = 0;
 let mapReady         = false;
 
-// Map objects (set after Google Maps loads)
+// Leaflet objects
 let gmap         = null;
 let gnssPolyline = null;
 let eskfPolyline = null;
 
-// ── Init ─────────────────────────────────────────────────────────────────────
+// ── Init ──────────────────────────────────────────────────────────────────────
 window.addEventListener("DOMContentLoaded", async () => {
-  await tryLoadMap();
+  initLeafletMap();
   await loadDevices();
   connectSocket();
   startStaleChecker();
 });
 
-// ── Google Maps ──────────────────────────────────────────────────────────────
-async function tryLoadMap() {
-  try {
-    const res = await AUTH.apiFetch("/api/v1/maps/key");
-    if (!res || !res.ok) return;
-    const { key } = await res.json();
-    if (!key) return;  // no key configured — placeholder stays visible
+// ── Leaflet Map ───────────────────────────────────────────────────────────────
+function initLeafletMap() {
+  const ph = document.getElementById("map-placeholder");
+  if (ph) ph.style.display = "none";
 
-    // Hide placeholder, load Maps script dynamically
-    document.getElementById("map-placeholder").style.display = "none";
-    const script = document.createElement("script");
-    script.src = `https://maps.googleapis.com/maps/api/js?key=${key}&callback=onMapReady`;
-    script.async = true;
-    document.head.appendChild(script);
-  } catch { /* map stays as placeholder */ }
+  gmap = L.map("map", { zoomControl: true }).setView([21.1642, 72.786], 15);
+
+  // Satellite base layer (Esri World Imagery — free, no key)
+  L.tileLayer(
+    "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}",
+    { attribution: "Tiles © Esri", maxZoom: 19 }
+  ).addTo(gmap);
+
+  // Labels overlay
+  L.tileLayer(
+    "https://{s}.basemaps.cartocdn.com/light_only_labels/{z}/{x}/{y}{r}.png",
+    { attribution: "© CartoDB", maxZoom: 19, opacity: 0.7 }
+  ).addTo(gmap);
+
+  gnssPolyline = L.polyline([], { color: "#ef4444", weight: 2.5, opacity: 0.9 }).addTo(gmap);
+  eskfPolyline = L.polyline([], { color: "#3b82f6", weight: 2.5, opacity: 0.9 }).addTo(gmap);
+
+  mapReady = true;
+
+  // Ensure map fills container after layout settles
+  setTimeout(() => gmap.invalidateSize(), 300);
 }
 
-window.onMapReady = function() {
-  mapReady = true;
-  gmap = new google.maps.Map(document.getElementById("map"), {
-    zoom: 15,
-    center: { lat: 21.1642, lng: 72.7862 },
-    mapTypeId: "satellite",
-    disableDefaultUI: false,
-  });
-  gnssPolyline = new google.maps.Polyline({
-    map: gmap, strokeColor: "#ef4444", strokeWeight: 2, strokeOpacity: 0.9,
-  });
-  eskfPolyline = new google.maps.Polyline({
-    map: gmap, strokeColor: "#3b82f6", strokeWeight: 2, strokeOpacity: 0.9,
-  });
-};
-
-// ── Device dropdown ──────────────────────────────────────────────────────────
+// ── Device dropdown ───────────────────────────────────────────────────────────
 async function loadDevices() {
   const sel = document.getElementById("device-select");
   try {
@@ -83,7 +78,6 @@ async function loadDevices() {
       sel.appendChild(o);
     });
 
-    // Auto-select if only one device
     if (devices.length === 1) {
       sel.value = devices[0].device_id;
       await onDeviceChange(devices[0].device_id);
@@ -93,12 +87,11 @@ async function loadDevices() {
   }
 }
 
-// ── On device select ─────────────────────────────────────────────────────────
+// ── On device select ──────────────────────────────────────────────────────────
 async function onDeviceChange(deviceId) {
   selectedDevice  = deviceId || null;
   selectedSession = null;
 
-  // Reset health + alerts
   resetHealth();
   setAlerts([]);
   clearMapTracks();
@@ -114,10 +107,9 @@ async function onDeviceChange(deviceId) {
     return;
   }
 
-  // Load sessions for this device
   const ssel = document.getElementById("session-select");
-  ssel.innerHTML  = "<option value=''>Loading...</option>";
-  ssel.disabled   = true;
+  ssel.innerHTML = "<option value=''>Loading...</option>";
+  ssel.disabled  = true;
 
   try {
     const res = await AUTH.apiFetch(`/api/v1/sessions/${deviceId}`);
@@ -137,33 +129,29 @@ async function onDeviceChange(deviceId) {
     });
 
     ssel.disabled = false;
-
-    // Auto-select LIVE
-    ssel.value = "live";
+    ssel.value    = "live";
     await onSessionChange("live");
   } catch {
     ssel.innerHTML = "<option value=''>Failed to load sessions</option>";
   }
 }
 
-// ── On session select ────────────────────────────────────────────────────────
+// ── On session select ─────────────────────────────────────────────────────────
 async function onSessionChange(sessionId) {
   selectedSession = sessionId || null;
   clearMapTracks();
-
   stopPolling();
+  stopReplay();
 
   if (!sessionId || !selectedDevice) return;
 
-if (sessionId === "live") {
+  if (sessionId === "live") {
     setExportButtons(false);
-    stopReplay();
     document.getElementById("session-info").textContent = `LIVE — ${selectedDevice}`;
     joinDeviceRoom(selectedDevice);
     startPolling(selectedDevice);
   } else {
     setExportButtons(true);
-    stopReplay();
     document.getElementById("session-info").textContent = `Session: ${sessionId.slice(-16)}`;
     setConnectionStatus("offline", "Historical session");
     await loadHistoricalTrack(sessionId);
@@ -172,10 +160,9 @@ if (sessionId === "live") {
   }
 }
 
-// ── Historical track loader ──────────────────────────────────────────────────
+// ── Historical track ──────────────────────────────────────────────────────────
 async function loadHistoricalTrack(sessionId) {
   if (!mapReady) return;
-
   try {
     const [gr, er] = await Promise.all([
       AUTH.apiFetch(`/api/v1/gnss/track/${selectedDevice}?session_id=${encodeURIComponent(sessionId)}`),
@@ -185,26 +172,20 @@ async function loadHistoricalTrack(sessionId) {
     const gnss = gr && gr.ok ? await gr.json() : [];
     const eskf = er && er.ok ? await er.json() : [];
 
-    if (gnss.length) {
-      gnssPolyline.setPath(gnss.map(p => ({ lat: p.lat, lng: p.lon })));
-    }
-    if (eskf.length) {
-      eskfPolyline.setPath(eskf.map(p => ({ lat: p.lat, lng: p.lon })));
-    }
+    if (gnss.length) gnssPolyline.setLatLngs(gnss.map(p => [p.lat, p.lon]));
+    if (eskf.length) eskfPolyline.setLatLngs(eskf.map(p => [p.lat, p.lon]));
 
-    // Auto-fit map bounds to track
-    if (gnss.length || eskf.length) {
-      const bounds = new google.maps.LatLngBounds();
-      [...gnss, ...eskf].forEach(p => bounds.extend({ lat: p.lat, lng: p.lon }));
-      gmap.fitBounds(bounds);
+    const all = [...gnss, ...eskf];
+    if (all.length) {
+      gmap.fitBounds(L.latLngBounds(all.map(p => [p.lat, p.lon])), { padding: [20, 20] });
     }
 
     document.getElementById("pkt-counter").textContent =
-      `${gnss.length} GNSS pts · ${eskf.length} ESKF pts`;
+      `${gnss.length} GNSS · ${eskf.length} ESKF`;
   } catch { /* silent */ }
 }
 
-// ── WebSocket ────────────────────────────────────────────────────────────────
+// ── WebSocket ─────────────────────────────────────────────────────────────────
 function connectSocket() {
   socket = io(window.location.origin, {
     auth: { token: AUTH.getToken() },
@@ -226,11 +207,9 @@ function connectSocket() {
     document.getElementById("stale-badge").style.display = "none";
     document.getElementById("pkt-counter").textContent   = `${packetCount} pkts`;
 
-    // Append ESKF point to map
     if (mapReady && eskfPolyline && doc.lat && doc.lon) {
-      const path = eskfPolyline.getPath();
-      path.push(new google.maps.LatLng(doc.lat, doc.lon));
-      gmap.panTo({ lat: doc.lat, lng: doc.lon });
+      eskfPolyline.addLatLng([doc.lat, doc.lon]);
+      gmap.panTo([doc.lat, doc.lon]);
     }
   });
 }
@@ -261,57 +240,45 @@ async function updateHealth(deviceId) {
     const doc = await res.json();
     const st  = doc.status || {};
 
-    // ── GNSS ──
-    const sats   = st.sats  !== undefined ? st.sats  : null;
-    const hdop   = st.hdop  !== undefined ? st.hdop  : null;
-    const gnssQ  = sats !== null ? Math.min(100, Math.round(sats / 12 * 100)) : 0;
-    const gnssColor = sats === null ? "#555"
-                    : sats >= 8 ? "#10b981"
-                    : sats >= 4 ? "#eab308"
-                    : "#ef4444";
+    // GNSS
+    const sats  = st.sats  !== undefined ? st.sats  : null;
+    const hdop  = st.hdop  !== undefined ? st.hdop  : null;
+    const gnssQ = sats !== null ? Math.min(100, Math.round(sats / 12 * 100)) : 0;
+    const gnssColor = sats === null ? "#555" : sats >= 8 ? "#10b981" : sats >= 4 ? "#eab308" : "#ef4444";
     setBar("h-gnss", gnssQ, gnssColor,
       sats !== null ? `${sats} sats` : "—",
       sats !== null ? `HDOP ${hdop !== null ? hdop.toFixed(1) : "—"}` : "No data");
 
-    // ── WiFi signal ──
-    const rssi   = st.wifi_rssi_dbm !== undefined ? st.wifi_rssi_dbm : null;
-    const wifiQ  = rssi !== null ? Math.max(0, Math.min(100, Math.round((rssi + 90) / 60 * 100))) : 0;
-    const wifiColor = rssi === null ? "#555"
-                    : rssi >= -65 ? "#10b981"
-                    : rssi >= -80 ? "#eab308"
-                    : "#ef4444";
+    // WiFi
+    const rssi  = st.wifi_rssi_dbm !== undefined ? st.wifi_rssi_dbm : null;
+    const wifiQ = rssi !== null ? Math.max(0, Math.min(100, Math.round((rssi + 90) / 60 * 100))) : 0;
+    const wifiColor = rssi === null ? "#555" : rssi >= -65 ? "#10b981" : rssi >= -80 ? "#eab308" : "#ef4444";
     setBar("h-wifi", wifiQ, wifiColor,
       rssi !== null ? `${rssi} dBm` : "—",
       rssi !== null ? (rssi >= -65 ? "Strong" : rssi >= -80 ? "Weak" : "Poor") : "No data");
 
-    // ── ESKF ──
-    const eskfInit = st.eskf_init !== undefined ? st.eskf_init : null;
-    const eskfQ    = eskfInit === true ? 100 : 0;
-    const eskfColor = eskfInit === true ? "#10b981"
-                    : eskfInit === false ? "#ef4444"
-                    : "#555";
+    // ESKF
+    const eskfInit  = st.eskf_init !== undefined ? st.eskf_init : null;
+    const eskfQ     = eskfInit === true ? 100 : 0;
+    const eskfColor = eskfInit === true ? "#10b981" : eskfInit === false ? "#ef4444" : "#555";
     setBar("h-eskf", eskfQ, eskfColor,
       eskfInit === null ? "—" : eskfInit ? "OK" : "Not init",
-      eskfInit === null ? "No data"
-                       : eskfInit ? "Filter initialized" : "Awaiting GPS fix");
+      eskfInit === null ? "No data" : eskfInit ? "Filter initialized" : "Awaiting GPS fix");
 
-    // ── Battery ──
+    // Battery
     const bpct = st.battery_pct !== undefined ? st.battery_pct : null;
     const bv   = st.battery_v   !== undefined ? st.battery_v   : null;
     if (bpct === null || bpct < 0) {
       setBar("h-batt", 0, "#555", "—", "N/A — IC pending");
     } else {
       const battColor = bpct >= 50 ? "#10b981" : bpct >= 20 ? "#eab308" : "#ef4444";
-      setBar("h-batt", bpct, battColor,
-        `${bpct}%`,
-        bv !== null ? `${bv.toFixed(2)} V` : "");
+      setBar("h-batt", bpct, battColor, `${bpct}%`, bv !== null ? `${bv.toFixed(2)} V` : "");
     }
-
   } catch { resetHealth(); }
 }
 
 function setBar(id, pct, color, val, sub) {
-  const fill = document.getElementById(`${id}-bar`);
+  const fill  = document.getElementById(`${id}-bar`);
   const valEl = document.getElementById(`${id}-val`);
   const subEl = document.getElementById(`${id}-sub`);
   if (fill)  { fill.style.width = pct + "%"; fill.style.background = color; }
@@ -352,7 +319,7 @@ function setAlerts(alerts) {
   `).join("");
 }
 
-// ── Stale data checker ────────────────────────────────────────────────────────
+// ── Stale checker ─────────────────────────────────────────────────────────────
 function startStaleChecker() {
   staleTimer = setInterval(() => {
     if (!lastPacketAt || selectedSession !== "live") return;
@@ -361,7 +328,7 @@ function startStaleChecker() {
     const dot   = document.getElementById("conn-dot");
     badge.style.display = stale ? "block" : "none";
     if (stale) {
-      dot.className  = "status-dot stale";
+      dot.className = "status-dot stale";
       document.getElementById("conn-label").textContent = "Stale";
     }
   }, 1000);
@@ -375,22 +342,20 @@ function setConnectionStatus(state, label) {
 }
 
 function clearMapTracks() {
-  if (gnssPolyline) gnssPolyline.setPath([]);
-  if (eskfPolyline) eskfPolyline.setPath([]);
+  if (gnssPolyline) gnssPolyline.setLatLngs([]);
+  if (eskfPolyline) eskfPolyline.setLatLngs([]);
 }
 
 // ══════════════════════════════════════════════════════════════════════════════
-// DAY 13 — EXPORT + REPLAY
+// EXPORT + REPLAY
 // ══════════════════════════════════════════════════════════════════════════════
 
-// ── Export CSV ────────────────────────────────────────────────────────────────
 async function exportCSV() {
   if (!selectedDevice || !selectedSession || selectedSession === "live") return;
   const url = `/api/v1/session/export?device_id=${encodeURIComponent(selectedDevice)}&session_id=${encodeURIComponent(selectedSession)}`;
   await triggerDownload(url);
 }
 
-// ── Export GeoJSON ────────────────────────────────────────────────────────────
 async function exportGeoJSON() {
   if (!selectedDevice || !selectedSession || selectedSession === "live") return;
   const url = `/api/v1/session/geojson?device_id=${encodeURIComponent(selectedDevice)}&session_id=${encodeURIComponent(selectedSession)}`;
@@ -436,18 +401,12 @@ async function loadReplayData(sessionId) {
     slider.value = 0;
     updateReplayTime(0);
 
-    // Draw full dim track as background
-    if (replayGnss.length)
-      gnssPolyline.setPath(replayGnss.map(p => ({ lat: p.lat, lng: p.lon })));
-    if (replayEskf.length)
-      eskfPolyline.setPath(replayEskf.map(p => ({ lat: p.lat, lng: p.lon })));
+    if (replayGnss.length) gnssPolyline.setLatLngs(replayGnss.map(p => [p.lat, p.lon]));
+    if (replayEskf.length) eskfPolyline.setLatLngs(replayEskf.map(p => [p.lat, p.lon]));
 
-    // Fit bounds
     const all = [...replayGnss, ...replayEskf];
     if (all.length) {
-      const bounds = new google.maps.LatLngBounds();
-      all.forEach(p => bounds.extend({ lat: p.lat, lng: p.lon }));
-      gmap.fitBounds(bounds);
+      gmap.fitBounds(L.latLngBounds(all.map(p => [p.lat, p.lon])), { padding: [20, 20] });
     }
 
     document.getElementById("pkt-counter").textContent =
@@ -476,25 +435,21 @@ function replayStep() {
   if (replayIdx >= max) { stopReplay(); return; }
 
   if (mapReady) {
-    if (replayIdx < replayGnss.length)
-      gnssPolyline.setPath(replayGnss.slice(0, replayIdx + 1).map(p => ({ lat: p.lat, lng: p.lon })));
-    if (replayIdx < replayEskf.length)
-      eskfPolyline.setPath(replayEskf.slice(0, replayIdx + 1).map(p => ({ lat: p.lat, lng: p.lon })));
+    gnssPolyline.setLatLngs(replayGnss.slice(0, replayIdx + 1).map(p => [p.lat, p.lon]));
+    eskfPolyline.setLatLngs(replayEskf.slice(0, replayIdx + 1).map(p => [p.lat, p.lon]));
   }
 
   document.getElementById("replay-slider").value = replayIdx;
   updateReplayTime(replayIdx);
   replayIdx++;
-  replayTimer = setTimeout(replayStep, 80);  // ~12 frames/sec
+  replayTimer = setTimeout(replayStep, 80);
 }
 
 function replaySeek(val) {
   replayIdx = parseInt(val);
   if (mapReady) {
-    if (replayGnss.length)
-      gnssPolyline.setPath(replayGnss.slice(0, replayIdx + 1).map(p => ({ lat: p.lat, lng: p.lon })));
-    if (replayEskf.length)
-      eskfPolyline.setPath(replayEskf.slice(0, replayIdx + 1).map(p => ({ lat: p.lat, lng: p.lon })));
+    gnssPolyline.setLatLngs(replayGnss.slice(0, replayIdx + 1).map(p => [p.lat, p.lon]));
+    eskfPolyline.setLatLngs(replayEskf.slice(0, replayIdx + 1).map(p => [p.lat, p.lon]));
   }
   updateReplayTime(replayIdx);
 }
@@ -515,10 +470,11 @@ function stopReplay() {
   replayTimer  = null;
   replayActive = false;
   const btn = document.getElementById("btn-replay");
-  btn.classList.remove("active");
-  btn.textContent = "▶ Replay";
-  document.getElementById("replay-bar").classList.remove("visible");
-  document.getElementById("replay-play-btn").textContent = "▶";
+  if (btn) { btn.classList.remove("active"); btn.textContent = "▶ Replay"; }
+  const bar = document.getElementById("replay-bar");
+  if (bar) bar.classList.remove("visible");
+  const pbtn = document.getElementById("replay-play-btn");
+  if (pbtn) pbtn.textContent = "▶";
 }
 
 function updateReplayTime(idx) {
@@ -526,9 +482,9 @@ function updateReplayTime(idx) {
   document.getElementById("replay-time").textContent = `${idx} / ${max}`;
 }
 
-// ── Enable/disable export buttons based on session type ───────────────────────
 function setExportButtons(enabled) {
   ["btn-csv", "btn-geojson", "btn-replay"].forEach(id => {
-    document.getElementById(id).disabled = !enabled;
+    const el = document.getElementById(id);
+    if (el) el.disabled = !enabled;
   });
 }
