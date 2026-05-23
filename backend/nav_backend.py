@@ -207,14 +207,14 @@ def sessions(device_id):
     docs = list(db.sessions.find(
         {"device_id": device_id},
         {"_id": 0, "session_id": 1, "started_at_server": 1,
-         "last_seen": 1, "packet_count": 1, "boot_count": 1,
+         "last_seen": 1, "last_packet_at": 1, "packet_count": 1, "boot_count": 1,
          "fw_version": 1, "started_t_epoch_ms": 1}
     ).sort("started_at_server", -1))
 
     result = []
     for d in docs:
         started = d.get("started_at_server")
-        last    = d.get("last_seen")
+        last    = d.get("last_seen") or d.get("last_packet_at")
         dur_s   = None
         if isinstance(started, datetime) and isinstance(last, datetime):
             dur_s = max(0, int((last - started).total_seconds()))
@@ -247,7 +247,7 @@ def device_latest(device_id):
 def gnss_track(device_id):
     q = request_session_filter(device_id)
     # Only return rows where GNSS fix was valid and position is non-zero
-    q["fix_valid"] = True
+    q["fix_valid"] = {"$ne": False}
     q["lat"]       = {"$nin": [None, 0]}
     q["lon"]       = {"$nin": [None, 0]}
     docs = list(db.gnss_raw.find(
@@ -267,8 +267,8 @@ def gnss_track(device_id):
 def eskf_track(device_id):
     q = request_session_filter(device_id)
     # Only return rows where ESKF was initialized and aligned
-    q["init_valid"]      = True
-    q["alignment_valid"] = True
+    q["init_valid"]      = {"$ne": False}
+    q["alignment_valid"] = {"$ne": False}
     q["lat"]             = {"$nin": [None, 0]}
     q["lon"]             = {"$nin": [None, 0]}
     docs = list(db.eskf_state.find(
@@ -522,7 +522,7 @@ def session_geojson():
     q = request_session_filter(device_id)
 
     # GNSS track — fix_valid=True only
-    gnss_q = {**q, "fix_valid": True,
+    gnss_q = {**q, "fix_valid": {"$ne": False},
                "lat": {"$nin": [None, 0]},
                "lon": {"$nin": [None, 0]}}
     gnss_docs = list(db.gnss_raw.find(
@@ -530,7 +530,7 @@ def session_geojson():
     ).sort("t_server", 1))
 
     # ESKF track — init_valid + alignment_valid
-    eskf_q = {**q, "init_valid": True, "alignment_valid": True,
+    eskf_q = {**q, "init_valid": {"$ne": False}, "alignment_valid": {"$ne": False},
                "lat": {"$nin": [None, 0]},
                "lon": {"$nin": [None, 0]}}
     eskf_docs = list(db.eskf_state.find(
