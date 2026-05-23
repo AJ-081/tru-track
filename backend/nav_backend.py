@@ -1,129 +1,574 @@
 #!/usr/bin/env python3
-"""TRU-TRACK Navigation Backend API.
-Flask + Flask-JWT-Extended + Flask-SocketIO.
-Day 6: auth core, maps key, static serving, WebSocket skeleton.
-Day 7: all /api/v1/ data routes added below the marked section.
+"""
+TRU-TRACK Flask Backend — v2.1
+Changes from v2.0:
+  - Export base changed from gnss_raw → imu_raw (continuous, no gaps)
+  - t_epoch_ms column in CSV export
+  - fix_valid, init_valid, alignment_valid, calibrated columns in CSV
+  - GeoJSON uses fix_valid=True filter for GNSS track
+  - GeoJSON uses init_valid=True filter for ESKF track
+  - ESKF track endpoint filters init_valid=True
 """
 import csv
 import io
-import json
 import logging
 import os
+import subprocess
 import time
-from datetime import datetime, timedelta, timezone
-from functools import wraps
+from collections import defaultdict
+from datetime import datetime, timedelta
 
 import bcrypt
 import psutil
-from bson import ObjectId
 from dotenv import load_dotenv
 from flask import Flask, Response, jsonify, request, send_from_directory
-from flask_cors import CORS
 from flask_jwt_extended import (
-    JWTManager,
-    create_access_token,
-    create_refresh_token,
-    get_jwt,
-    get_jwt_identity,
-    jwt_required,
-    verify_jwt_in_request,
+    JWTManager, create_access_token, create_refresh_token,
+    get_jwt_identity, jwt_required,
 )
 from flask_socketio import SocketIO, join_room
-from pymongo import MongoClient, ASCENDING, DESCENDING
+from pymongo import MongoClient
 
 load_dotenv("/etc/tru-track/secrets.env")
 
-logging.basicConfig(level=logging.INFO,
-                    format="%(asctime)s %(levelname)s %(message)s")
+# ── Config ────────────────────────────────────────────────────────────────────
+MONGO_URI      = os.getenv("MONGO_URI", "mongodb://127.0.0.1:27017/?directConnection=true")
+MONGO_DB       = os.getenv("MONGO_DB", "nav")
+FLASK_SECRET   = os.getenv("FLASK_SECRET_KEY", "changeme")
+JWT_SECRET     = os.getenv("JWT_SECRET_KEY", "changeme")
+DASHBOARD_DIR  = os.getenv("DASHBOARD_DIR", "/opt/tru-track/dashboard")
+SERVER_HOST    = os.getenv("SERVER_HOST", "0.0.0.0")
+SERVER_PORT    = int(os.getenv("SERVER_PORT", 9000))
+GOOGLE_MAPS_KEY = os.getenv("GOOGLE_MAPS_KEY", "")
+
 logging.getLogger("werkzeug").setLevel(logging.ERROR)
 
-# ── App ───────────────────────────────────────────────────────────────────────
+# ── Flask + SocketIO ──────────────────────────────────────────────────────────
 app = Flask(__name__)
-app.config["SECRET_KEY"]                = os.environ["FLASK_SECRET_KEY"]
-app.config["JWT_SECRET_KEY"]            = os.environ["JWT_SECRET_KEY"]
+app.config["SECRET_KEY"]                = FLASK_SECRET
+app.config["JWT_SECRET_KEY"]            = JWT_SECRET
 app.config["JWT_ACCESS_TOKEN_EXPIRES"]  = timedelta(hours=8)
 app.config["JWT_REFRESH_TOKEN_EXPIRES"] = timedelta(days=30)
 
-CORS(app, resources={r"/api/*": {"origins": "*"}})
-jwt = JWTManager(app)
-sio = SocketIO(app, cors_allowed_origins="*", async_mode="threading")
-
-DASHBOARD_DIR = os.environ.get("DASHBOARD_DIR", "/opt/tru-track/dashboard")
-SERVER_PORT   = int(os.environ.get("SERVER_PORT", 9000))
+jwt      = JWTManager(app)
+socketio = SocketIO(app, cors_allowed_origins="*", async_mode="threading")
 
 # ── MongoDB ───────────────────────────────────────────────────────────────────
-MONGO_URI = os.environ.get("MONGO_URI", "mongodb://127.0.0.1:27017/?directConnection=true")
-MONGO_DB  = os.environ.get("MONGO_DB", "nav")
-mongo     = MongoClient(MONGO_URI)
-db        = mongo[MONGO_DB]
+mongo = MongoClient(MONGO_URI)
+db    = mongo[MONGO_DB]
 
-# ── Role system ───────────────────────────────────────────────────────────────
+DEFAULT_HISTORY_DAYS = 30
+SESSION_GAP_SECONDS  = 120
+
+# ── Role levels ───────────────────────────────────────────────────────────────
 ROLE_LEVELS = {"viewer": 1, "analyst": 2, "admin": 3, "superadmin": 4}
 
 def role_required(min_role: str):
     def decorator(fn):
+        from functools import wraps
         @wraps(fn)
+        @jwt_required()
         def wrapper(*args, **kwargs):
-            verify_jwt_in_request()
-            role = get_jwt().get("role", "viewer")
-            if ROLE_LEVELS.get(role, 0) < ROLE_LEVELS.get(min_role, 99):
+            identity = get_jwt_identity()
+            user = db.users.find_one({"email": identity}, {"role": 1})
+            if not user:
+                return jsonify({"error": "User not found"}), 401
+            if ROLE_LEVELS.get(user.get("role", "viewer"), 0) < ROLE_LEVELS.get(min_role, 99):
                 return jsonify({"error": "Insufficient role"}), 403
             return fn(*args, **kwargs)
         return wrapper
     return decorator
 
-# ── Auth routes ───────────────────────────────────────────────────────────────
+
+# ─────────────────────────────────────────────────────────────────────────────
+# AUTH ROUTES
+# ─────────────────────────────────────────────────────────────────────────────
 @app.route("/api/v1/auth/login", methods=["POST"])
-def auth_login():
-    data     = request.get_json(silent=True) or {}
-    email    = (data.get("email") or "").lower().strip()
-    password = (data.get("password") or "").encode()
+def login():
+    data     = request.get_json() or {}
+    email    = (data.get("email") or "").strip().lower()
+    password = data.get("password") or ""
+
     if not email or not password:
-        return jsonify({"error": "email and password required"}), 400
+        return jsonify({"error": "Email and password required"}), 400
+
     user = db.users.find_one({"email": email})
-    if not user or not bcrypt.checkpw(password, user["password_hash"].encode()):
+    if not user:
         return jsonify({"error": "Invalid credentials"}), 401
-    db.users.update_one({"_id": user["_id"]},
-                        {"$set": {"last_login": datetime.utcnow()}})
-    extra = {"role": user["role"], "name": user.get("name", "")}
+
+    pw_hash = user.get("password_hash") or user.get("password") or ""
+    if not bcrypt.checkpw(password.encode(), pw_hash.encode()):
+        return jsonify({"error": "Invalid credentials"}), 401
+
+    access  = create_access_token(identity=email)
+    refresh = create_refresh_token(identity=email)
     return jsonify({
-        "access_token":  create_access_token(identity=email,
-                                              additional_claims=extra),
-        "refresh_token": create_refresh_token(identity=email,
-                                              additional_claims=extra),
-        "role": user["role"],
-        "name": user.get("name", ""),
+        "access_token":  access,
+        "refresh_token": refresh,
+        "role":          user.get("role", "viewer"),
+        "name":          user.get("name", ""),
     })
+
 
 @app.route("/api/v1/auth/refresh", methods=["POST"])
 @jwt_required(refresh=True)
-def auth_refresh():
+def refresh():
     identity = get_jwt_identity()
-    claims   = get_jwt()
-    extra    = {"role": claims.get("role"), "name": claims.get("name", "")}
-    return jsonify({
-        "access_token": create_access_token(identity=identity,
-                                             additional_claims=extra)
-    })
+    return jsonify({"access_token": create_access_token(identity=identity)})
+
 
 @app.route("/api/v1/auth/me")
 @jwt_required()
-def auth_me():
-    claims = get_jwt()
-    return jsonify({
-        "email": get_jwt_identity(),
-        "role":  claims.get("role"),
-        "name":  claims.get("name"),
-    })
+def me():
+    identity = get_jwt_identity()
+    user = db.users.find_one({"email": identity}, {"_id": 0, "password_hash": 0, "password": 0})
+    return jsonify(user or {})
 
-# ── Maps key (auth-gated, never in HTML) ─────────────────────────────────────
+
 @app.route("/api/v1/maps/key")
 @jwt_required()
 def maps_key():
-    return jsonify({"key": os.environ.get("GOOGLE_MAPS_KEY", "")})
+    return jsonify({"key": GOOGLE_MAPS_KEY})
 
-# ── Server health (public — used by monitoring) ───────────────────────────────
 
+# ─────────────────────────────────────────────────────────────────────────────
+# DASHBOARD STATIC FILES
+# ─────────────────────────────────────────────────────────────────────────────
+@app.route("/")
+def dashboard():
+    return send_from_directory(DASHBOARD_DIR, "index.html")
+
+@app.route("/login")
+def login_page():
+    return send_from_directory(DASHBOARD_DIR, "login.html")
+
+@app.route("/<path:filename>")
+def static_files(filename):
+    return send_from_directory(DASHBOARD_DIR, filename)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# HELPERS
+# ─────────────────────────────────────────────────────────────────────────────
+def parse_iso_utc(value):
+    if not value:
+        return None
+    try:
+        if value.endswith("Z"):
+            value = value[:-1] + "+00:00"
+        dt = datetime.fromisoformat(value)
+        if dt.tzinfo is not None:
+            return dt.astimezone().replace(tzinfo=None)
+        return dt
+    except Exception:
+        return None
+
+
+def request_session_filter(device_id):
+    q          = {"device_id": device_id}
+    session_id = request.args.get("session_id")
+    start      = parse_iso_utc(request.args.get("start"))
+    end        = parse_iso_utc(request.args.get("end"))
+
+    if session_id:
+        q["session_id"] = session_id
+        return q
+    if start or end:
+        ts = {}
+        if start: ts["$gte"] = start
+        if end:   ts["$lte"] = end
+        if ts:    q["t_server"] = ts
+        return q
+    q["t_server"] = {"$gte": datetime.utcnow() - timedelta(days=DEFAULT_HISTORY_DAYS)}
+    return q
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# DEVICE + SESSION ROUTES
+# ─────────────────────────────────────────────────────────────────────────────
+@app.route("/api/v1/devices")
+@jwt_required()
+def devices():
+    docs = list(db.device_registry.find(
+        {}, {"_id": 0, "device_id": 1, "first_seen": 1, "last_seen": 1,
+             "fw_version": 1, "total_packets": 1}
+    ).sort("last_seen", -1))
+    for d in docs:
+        d["label"] = d.get("device_id", "")
+        for k in ("first_seen", "last_seen"):
+            if isinstance(d.get(k), datetime):
+                d[k] = d[k].isoformat()
+    return jsonify(docs)
+
+
+@app.route("/api/v1/sessions/<device_id>")
+@jwt_required()
+def sessions(device_id):
+    docs = list(db.sessions.find(
+        {"device_id": device_id},
+        {"_id": 0, "session_id": 1, "started_at_server": 1,
+         "last_seen": 1, "packet_count": 1, "boot_count": 1,
+         "fw_version": 1, "started_t_epoch_ms": 1}
+    ).sort("started_at_server", -1))
+
+    result = []
+    for d in docs:
+        started = d.get("started_at_server")
+        last    = d.get("last_seen")
+        dur_s   = None
+        if isinstance(started, datetime) and isinstance(last, datetime):
+            dur_s = max(0, int((last - started).total_seconds()))
+        result.append({
+            "session_id":       d.get("session_id"),
+            "started_at_server": started.isoformat() if isinstance(started, datetime) else None,
+            "duration_s":       dur_s,
+            "packet_count":     d.get("packet_count"),
+            "boot_count":       d.get("boot_count"),
+            "fw_version":       d.get("fw_version"),
+            "started_t_epoch_ms": d.get("started_t_epoch_ms", 0),
+        })
+    return jsonify(result)
+
+
+@app.route("/api/v1/device/latest/<device_id>")
+@jwt_required()
+def device_latest(device_id):
+    doc = db.device_latest.find_one({"device_id": device_id}, {"_id": 0})
+    if doc and isinstance(doc.get("last_seen"), datetime):
+        doc["last_seen"] = doc["last_seen"].isoformat()
+    return jsonify(doc or {})
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# TRACK ROUTES
+# ─────────────────────────────────────────────────────────────────────────────
+@app.route("/api/v1/gnss/track/<device_id>")
+@jwt_required()
+def gnss_track(device_id):
+    q = request_session_filter(device_id)
+    # Only return rows where GNSS fix was valid and position is non-zero
+    q["fix_valid"] = True
+    q["lat"]       = {"$nin": [None, 0]}
+    q["lon"]       = {"$nin": [None, 0]}
+    docs = list(db.gnss_raw.find(
+        q,
+        {"_id": 0, "lat": 1, "lon": 1, "alt": 1, "speed": 1,
+         "course": 1, "sats": 1, "hdop": 1, "t_ms": 1,
+         "t_server": 1, "t_epoch_ms": 1}
+    ).sort("t_server", 1).limit(50000))
+    for d in docs:
+        if isinstance(d.get("t_server"), datetime):
+            d["t_server"] = d["t_server"].isoformat()
+    return jsonify(docs)
+
+
+@app.route("/api/v1/eskf/track/<device_id>")
+@jwt_required()
+def eskf_track(device_id):
+    q = request_session_filter(device_id)
+    # Only return rows where ESKF was initialized and aligned
+    q["init_valid"]      = True
+    q["alignment_valid"] = True
+    q["lat"]             = {"$nin": [None, 0]}
+    q["lon"]             = {"$nin": [None, 0]}
+    docs = list(db.eskf_state.find(
+        q,
+        {"_id": 0, "lat": 1, "lon": 1, "alt": 1, "vE": 1, "vN": 1,
+         "vU": 1, "roll": 1, "pitch": 1, "yaw": 1, "t_ms": 1,
+         "t_server": 1, "t_epoch_ms": 1}
+    ).sort("t_server", 1).limit(50000))
+    for d in docs:
+        if isinstance(d.get("t_server"), datetime):
+            d["t_server"] = d["t_server"].isoformat()
+    return jsonify(docs)
+
+
+@app.route("/api/v1/imu/latest/<device_id>")
+@jwt_required()
+def imu_latest(device_id):
+    doc = db.imu_raw.find_one(
+        {"device_id": device_id},
+        sort=[("t_server", -1)],
+        projection={"_id": 0}
+    )
+    if doc and isinstance(doc.get("t_server"), datetime):
+        doc["t_server"] = doc["t_server"].isoformat()
+    return jsonify(doc or {})
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# ALERTS
+# ─────────────────────────────────────────────────────────────────────────────
+@app.route("/api/v1/alerts/<device_id>")
+@jwt_required()
+def alerts(device_id):
+    doc    = db.device_latest.find_one({"device_id": device_id}) or {}
+    status = doc.get("status") or {}
+    result = []
+
+    if not status.get("gnss_fix"):
+        result.append({"level": "error",   "code": "GNSS_NO_FIX",
+                        "msg": "No GNSS fix"})
+    elif (status.get("sats") or 0) < 4:
+        result.append({"level": "warning",  "code": "GNSS_FEW_SATS",
+                        "msg": f"Only {status.get('sats', 0)} satellites"})
+
+    rssi = status.get("wifi_rssi_dbm")
+    if rssi is not None and rssi < -80:
+        result.append({"level": "warning",  "code": "SIGNAL_WEAK",
+                        "msg": f"RSSI {rssi} dBm"})
+
+    last_seen = doc.get("last_seen")
+    if isinstance(last_seen, datetime):
+        age = (datetime.utcnow() - last_seen).total_seconds()
+        if age > 30:
+            result.append({"level": "error", "code": "STALE_DATA",
+                            "msg": f"No packet for {int(age)}s"})
+
+    bpct = status.get("battery_pct", -1)
+    if bpct is not None and 0 <= bpct < 10:
+        result.append({"level": "error",   "code": "BATTERY_CRITICAL",
+                        "msg": f"Battery {bpct}%"})
+    elif bpct is not None and 10 <= bpct < 20:
+        result.append({"level": "warning", "code": "BATTERY_LOW",
+                        "msg": f"Battery {bpct}%"})
+
+    return jsonify(result)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# AI (FUTURE)
+# ─────────────────────────────────────────────────────────────────────────────
+@app.route("/api/v1/ai/latest/<device_id>")
+@jwt_required()
+def ai_latest(device_id):
+    doc = db.ai_sequences.find_one(
+        {"device_id": device_id},
+        sort=[("t_start", -1)],
+        projection={"_id": 0}
+    )
+    return jsonify(doc or {"driver_score": None, "anomaly": None})
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# CSV EXPORT — imu_raw as base (continuous anchor)
+# Left-joins gnss_raw and eskf_state by t_ms proximity
+# All rows present regardless of GNSS fix or ESKF state
+# ─────────────────────────────────────────────────────────────────────────────
+def docs_to_csv_rows(device_id):
+    base_query = request_session_filter(device_id)
+
+    # imu_raw is the anchor — every packet writes here, no conditions
+    imu_docs  = list(db.imu_raw.find(
+        base_query,
+        {"_id": 0, "device_id": 1, "session_id": 1, "boot_count": 1,
+         "t_ms": 1, "t_server": 1, "t_epoch_ms": 1, "ntp_synced": 1,
+         "calibrated": 1,
+         "accel_raw": 1, "gyro_raw": 1, "accel_mps2": 1,
+         "gyro_radps": 1, "gyro_bias_radps": 1}
+    ).sort("t_server", 1))
+
+    gnss_docs = list(db.gnss_raw.find(
+        base_query,
+        {"_id": 0, "t_ms": 1, "t_server": 1,
+         "fix_valid": 1, "lat": 1, "lon": 1, "alt": 1,
+         "speed": 1, "course": 1, "sats": 1, "hdop": 1,
+         "fix_type": 1, "age_ms": 1}
+    ).sort("t_server", 1))
+
+    eskf_docs = list(db.eskf_state.find(
+        base_query,
+        {"_id": 0, "t_ms": 1, "t_server": 1,
+         "init_valid": 1, "alignment_valid": 1,
+         "lat": 1, "lon": 1, "alt": 1,
+         "vE": 1, "vN": 1, "vU": 1,
+         "roll": 1, "pitch": 1, "yaw": 1, "innov": 1}
+    ).sort("t_server", 1))
+
+    # Build lookup by t_ms for fast join
+    def tms_lookup(docs):
+        d = {}
+        for doc in docs:
+            k = doc.get("t_ms")
+            if k is not None:
+                d[k] = doc
+        return d
+
+    gnss_by_tms = tms_lookup(gnss_docs)
+    eskf_by_tms = tms_lookup(eskf_docs)
+
+    rows = []
+    for imu in imu_docs:
+        tms = imu.get("t_ms")
+        ts  = imu.get("t_server")
+        gnss = gnss_by_tms.get(tms, {})
+        eskf = eskf_by_tms.get(tms, {})
+
+        accel_raw  = imu.get("accel_raw")  or [None, None, None]
+        gyro_raw   = imu.get("gyro_raw")   or [None, None, None]
+        accel_mps2 = imu.get("accel_mps2") or [None, None, None]
+        gyro_radps = imu.get("gyro_radps") or [None, None, None]
+
+        innov = eskf.get("innov") or {}
+
+        row = {
+            "device_id":      device_id,
+            "session_id":     imu.get("session_id"),
+            "boot_count":     imu.get("boot_count"),
+            "t_ms":           tms,
+            "t_server":       ts.isoformat() if isinstance(ts, datetime) else ts,
+            "t_epoch_ms_ist": imu.get("t_epoch_ms", 0),
+            "ntp_synced":     imu.get("ntp_synced", False),
+
+            # GNSS — empty when fix_valid=False
+            "gnss_fix_valid": gnss.get("fix_valid", ""),
+            "gnss_lat":       gnss.get("lat", ""),
+            "gnss_lon":       gnss.get("lon", ""),
+            "gnss_alt":       gnss.get("alt", ""),
+            "gnss_speed":     gnss.get("speed", ""),
+            "gnss_course":    gnss.get("course", ""),
+            "gnss_sats":      gnss.get("sats", ""),
+            "gnss_hdop":      gnss.get("hdop", ""),
+            "gnss_fix_type":  gnss.get("fix_type", ""),
+            "gnss_age_ms":    gnss.get("age_ms", ""),
+
+            # ESKF — empty when init_valid=False
+            "eskf_init_valid":      eskf.get("init_valid", ""),
+            "eskf_alignment_valid": eskf.get("alignment_valid", ""),
+            "eskf_lat":             eskf.get("lat", ""),
+            "eskf_lon":             eskf.get("lon", ""),
+            "eskf_alt":             eskf.get("alt", ""),
+            "eskf_vE":              eskf.get("vE", ""),
+            "eskf_vN":              eskf.get("vN", ""),
+            "eskf_vU":              eskf.get("vU", ""),
+            "eskf_roll":            eskf.get("roll", ""),
+            "eskf_pitch":           eskf.get("pitch", ""),
+            "eskf_yaw":             eskf.get("yaw", ""),
+            "eskf_innov_pos_norm":  innov.get("pos_norm", ""),
+            "eskf_innov_vel_norm":  innov.get("vel_norm", ""),
+
+            # IMU — always present
+            "imu_calibrated":    imu.get("calibrated", False),
+            "imu_accel_raw_x":   accel_raw[0]  if len(accel_raw)  > 0 else "",
+            "imu_accel_raw_y":   accel_raw[1]  if len(accel_raw)  > 1 else "",
+            "imu_accel_raw_z":   accel_raw[2]  if len(accel_raw)  > 2 else "",
+            "imu_gyro_raw_x":    gyro_raw[0]   if len(gyro_raw)   > 0 else "",
+            "imu_gyro_raw_y":    gyro_raw[1]   if len(gyro_raw)   > 1 else "",
+            "imu_gyro_raw_z":    gyro_raw[2]   if len(gyro_raw)   > 2 else "",
+            "imu_accel_mps2_x":  accel_mps2[0] if len(accel_mps2) > 0 else "",
+            "imu_accel_mps2_y":  accel_mps2[1] if len(accel_mps2) > 1 else "",
+            "imu_accel_mps2_z":  accel_mps2[2] if len(accel_mps2) > 2 else "",
+            "imu_gyro_radps_x":  gyro_radps[0] if len(gyro_radps) > 0 else "",
+            "imu_gyro_radps_y":  gyro_radps[1] if len(gyro_radps) > 1 else "",
+            "imu_gyro_radps_z":  gyro_radps[2] if len(gyro_radps) > 2 else "",
+        }
+        rows.append(row)
+
+    return rows
+
+
+@app.route("/api/v1/session/export")
+@role_required("analyst")
+def session_export():
+    device_id  = request.args.get("device_id")
+    session_id = request.args.get("session_id")
+    if not device_id:
+        return jsonify({"error": "device_id required"}), 400
+
+    rows = docs_to_csv_rows(device_id)
+    if not rows:
+        return jsonify({"error": "No data for requested session"}), 404
+
+    fieldnames = [
+        "device_id", "session_id", "boot_count",
+        "t_ms", "t_server", "t_epoch_ms_ist", "ntp_synced",
+        "gnss_fix_valid", "gnss_lat", "gnss_lon", "gnss_alt",
+        "gnss_speed", "gnss_course", "gnss_sats", "gnss_hdop",
+        "gnss_fix_type", "gnss_age_ms",
+        "eskf_init_valid", "eskf_alignment_valid",
+        "eskf_lat", "eskf_lon", "eskf_alt",
+        "eskf_vE", "eskf_vN", "eskf_vU",
+        "eskf_roll", "eskf_pitch", "eskf_yaw",
+        "eskf_innov_pos_norm", "eskf_innov_vel_norm",
+        "imu_calibrated",
+        "imu_accel_raw_x", "imu_accel_raw_y", "imu_accel_raw_z",
+        "imu_gyro_raw_x",  "imu_gyro_raw_y",  "imu_gyro_raw_z",
+        "imu_accel_mps2_x","imu_accel_mps2_y","imu_accel_mps2_z",
+        "imu_gyro_radps_x","imu_gyro_radps_y","imu_gyro_radps_z",
+    ]
+
+    buf = io.StringIO()
+    writer = csv.DictWriter(buf, fieldnames=fieldnames, extrasaction="ignore")
+    writer.writeheader()
+    writer.writerows(rows)
+
+    suffix = (session_id or "").replace(":", "-")[-8:] or datetime.utcnow().strftime("%Y%m%d_%H%M%S")
+    fname  = f"tru-track-{device_id.replace(':', '-')}-{suffix}.csv"
+    return Response(
+        buf.getvalue(),
+        mimetype="text/csv",
+        headers={"Content-Disposition": f'attachment; filename="{fname}"'},
+    )
+
+
+@app.route("/api/v1/session/geojson")
+@jwt_required()
+def session_geojson():
+    device_id  = request.args.get("device_id")
+    session_id = request.args.get("session_id")
+    if not device_id:
+        return jsonify({"error": "device_id required"}), 400
+
+    q = request_session_filter(device_id)
+
+    # GNSS track — fix_valid=True only
+    gnss_q = {**q, "fix_valid": True,
+               "lat": {"$nin": [None, 0]},
+               "lon": {"$nin": [None, 0]}}
+    gnss_docs = list(db.gnss_raw.find(
+        gnss_q, {"_id": 0, "lat": 1, "lon": 1, "alt": 1}
+    ).sort("t_server", 1))
+
+    # ESKF track — init_valid + alignment_valid
+    eskf_q = {**q, "init_valid": True, "alignment_valid": True,
+               "lat": {"$nin": [None, 0]},
+               "lon": {"$nin": [None, 0]}}
+    eskf_docs = list(db.eskf_state.find(
+        eskf_q, {"_id": 0, "lat": 1, "lon": 1, "alt": 1}
+    ).sort("t_server", 1))
+
+    features = []
+    if gnss_docs:
+        features.append({
+            "type": "Feature",
+            "properties": {"name": "GNSS track", "source": "gnss_raw"},
+            "geometry": {
+                "type": "LineString",
+                "coordinates": [[d["lon"], d["lat"], d.get("alt", 0)] for d in gnss_docs]
+            }
+        })
+    if eskf_docs:
+        features.append({
+            "type": "Feature",
+            "properties": {"name": "ESKF track", "source": "eskf_state"},
+            "geometry": {
+                "type": "LineString",
+                "coordinates": [[d["lon"], d["lat"], d.get("alt", 0)] for d in eskf_docs]
+            }
+        })
+
+    suffix = (session_id or "").replace(":", "-")[-8:] or datetime.utcnow().strftime("%Y%m%d_%H%M%S")
+    fname  = f"tru-track-{device_id.replace(':', '-')}-{suffix}.geojson"
+    return Response(
+        __import__("json").dumps({"type": "FeatureCollection", "features": features}, indent=2),
+        mimetype="application/geo+json",
+        headers={"Content-Disposition": f'attachment; filename="{fname}"'},
+    )
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# SERVER HEALTH
+# ─────────────────────────────────────────────────────────────────────────────
 @app.route("/api/v1/server/health")
 def server_health():
     import subprocess as _sp
@@ -131,7 +576,6 @@ def server_health():
     disk = psutil.disk_usage("/")
     cpu  = psutil.cpu_percent(interval=0.2)
 
-    # Check all services
     svcs = ["mongod", "mosquitto", "nginx",
             "tru-track-ingest", "tru-track-backend"]
     svc_status = {}
@@ -143,7 +587,7 @@ def server_health():
         except Exception:
             svc_status[svc] = False
 
-    core = ["mongod", "tru-track-ingest", "tru-track-backend"]
+    core      = ["mongod", "tru-track-ingest", "tru-track-backend"]
     core_down = [s for s in core if not svc_status.get(s)]
     any_down  = [s for s in svcs  if not svc_status.get(s)]
 
@@ -157,310 +601,39 @@ def server_health():
         level = "healthy"
 
     return jsonify({
-        "status":          "ok",
-        "status_level":    level,
-        "cpu_percent":     cpu,
+        "status":         "ok",
+        "status_level":   level,
+        "cpu_percent":    cpu,
         "memory": {
-            "used_gb":     round(mem.used  / 1e9, 2),
-            "total_gb":    round(mem.total / 1e9, 2),
-            "percent":     mem.percent,
+            "used_gb":    round(mem.used  / 1e9, 2),
+            "total_gb":   round(mem.total / 1e9, 2),
+            "percent":    mem.percent,
         },
         "disk": {
-            "used_gb":     round(disk.used  / 1e9, 2),
-            "total_gb":    round(disk.total / 1e9, 2),
-            "percent":     disk.percent,
+            "used_gb":    round(disk.used  / 1e9, 2),
+            "total_gb":   round(disk.total / 1e9, 2),
+            "percent":    disk.percent,
         },
-        "uptime_hours":    round((time.time() - psutil.boot_time()) / 3600, 1),
-        "services":        svc_status,
-        "services_up":     sum(svc_status.values()),
-        "services_total":  len(svcs),
-        "timestamp":       datetime.utcnow().isoformat(),
+        "uptime_hours":   round((time.time() - psutil.boot_time()) / 3600, 1),
+        "services":       svc_status,
+        "services_up":    sum(svc_status.values()),
+        "services_total": len(svcs),
+        "timestamp":      datetime.utcnow().isoformat(),
     })
 
-# ── Static dashboard ──────────────────────────────────────────────────────────
-@app.route("/")
-def dashboard():
-    return send_from_directory(DASHBOARD_DIR, "index.html")
 
-@app.route("/login")
-def login_page():
-    return send_from_directory(DASHBOARD_DIR, "login.html")
-
-@app.route("/<path:filename>")
-def static_files(filename):
-    return send_from_directory(DASHBOARD_DIR, filename)
-
-# ── WebSocket ─────────────────────────────────────────────────────────────────
-@sio.on("join_device")
+# ─────────────────────────────────────────────────────────────────────────────
+# WEBSOCKET
+# ─────────────────────────────────────────────────────────────────────────────
+@socketio.on("join_device")
 def on_join_device(data):
-    device_id = data.get("device_id", "all")
-    join_room(device_id)
-
-# ═══════════════════════════════════════════════════════════════════════════════
-# DAY 7 — API DATA ROUTES GO HERE
-# ═══════════════════════════════════════════════════════════════════════════════
-
-# ── Devices ───────────────────────────────────────────────────────────────────
-@app.route("/api/v1/devices")
-@jwt_required()
-def api_devices():
-    docs = list(db.device_registry.find({}, {"_id": 0}).sort("last_seen", DESCENDING))
-    for d in docs:
-        if isinstance(d.get("last_seen"), datetime):
-            d["last_seen"] = d["last_seen"].isoformat()
-        if isinstance(d.get("first_seen"), datetime):
-            d["first_seen"] = d["first_seen"].isoformat()
-    return jsonify(docs)
+    device_id = data.get("device_id")
+    if device_id:
+        join_room(device_id)
 
 
-# ── Sessions ──────────────────────────────────────────────────────────────────
-@app.route("/api/v1/sessions/<device_id>")
-@jwt_required()
-def api_sessions(device_id):
-    cursor = db.sessions.find(
-        {"device_id": device_id}, {"_id": 0}
-    ).sort("started_at_server", DESCENDING).limit(200)
-    docs = []
-    for d in cursor:
-        for k in ("started_at_server", "last_packet_at"):
-            if isinstance(d.get(k), datetime):
-                d[k] = d[k].isoformat()
-        if isinstance(d.get("started_at_server"), str) and isinstance(d.get("last_packet_at"), str):
-            try:
-                t0 = datetime.fromisoformat(d["started_at_server"])
-                t1 = datetime.fromisoformat(d["last_packet_at"])
-                d["duration_s"] = round((t1 - t0).total_seconds())
-            except Exception:
-                d["duration_s"] = 0
-        docs.append(d)
-    return jsonify(docs)
-
-
-# ── Device latest state ───────────────────────────────────────────────────────
-@app.route("/api/v1/device/latest/<device_id>")
-@jwt_required()
-def api_device_latest(device_id):
-    doc = db.device_latest.find_one({"device_id": device_id}, {"_id": 0})
-    if not doc:
-        return jsonify({"error": "device not found"}), 404
-    if isinstance(doc.get("last_seen"), datetime):
-        doc["last_seen"] = doc["last_seen"].isoformat()
-    return jsonify(doc)
-
-
-# ── GNSS track ────────────────────────────────────────────────────────────────
-@app.route("/api/v1/gnss/track/<device_id>")
-@jwt_required()
-def api_gnss_track(device_id):
-    session_id = request.args.get("session_id")
-    query = {"device_id": device_id}
-    if session_id:
-        query["session_id"] = session_id
-    cursor = db.gnss_raw.find(
-        query,
-        {"_id": 0, "lat": 1, "lon": 1, "alt": 1, "speed": 1,
-         "sats": 1, "hdop": 1, "fix_type": 1, "t_ms": 1, "t_server": 1}
-    ).sort("t_server", ASCENDING).limit(50000)
-    points = []
-    for d in cursor:
-        if not d.get("lat") or not d.get("lon"):
-            continue
-        if d["lat"] == 0 and d["lon"] == 0:
-            continue
-        if isinstance(d.get("t_server"), datetime):
-            d["t_server"] = d["t_server"].isoformat()
-        points.append(d)
-    return jsonify(points)
-
-
-# ── ESKF track ────────────────────────────────────────────────────────────────
-@app.route("/api/v1/eskf/track/<device_id>")
-@jwt_required()
-def api_eskf_track(device_id):
-    session_id = request.args.get("session_id")
-    query = {"device_id": device_id}
-    if session_id:
-        query["session_id"] = session_id
-    cursor = db.eskf_state.find(
-        query,
-        {"_id": 0, "lat": 1, "lon": 1, "alt": 1,
-         "vE": 1, "vN": 1, "vU": 1, "roll": 1, "pitch": 1, "yaw": 1,
-         "t_ms": 1, "t_server": 1}
-    ).sort("t_server", ASCENDING).limit(50000)
-    points = []
-    for d in cursor:
-        if not d.get("lat") or not d.get("lon"):
-            continue
-        if isinstance(d.get("t_server"), datetime):
-            d["t_server"] = d["t_server"].isoformat()
-        points.append(d)
-    return jsonify(points)
-
-
-# ── IMU latest ────────────────────────────────────────────────────────────────
-@app.route("/api/v1/imu/latest/<device_id>")
-@jwt_required()
-def api_imu_latest(device_id):
-    doc = db.imu_raw.find_one(
-        {"device_id": device_id},
-        {"_id": 0},
-        sort=[("t_server", DESCENDING)]
-    )
-    if not doc:
-        return jsonify({"error": "no IMU data"}), 404
-    if isinstance(doc.get("t_server"), datetime):
-        doc["t_server"] = doc["t_server"].isoformat()
-    return jsonify(doc)
-
-
-# ── Alerts ────────────────────────────────────────────────────────────────────
-@app.route("/api/v1/alerts/<device_id>")
-@jwt_required()
-def api_alerts(device_id):
-    doc = db.device_latest.find_one({"device_id": device_id}, {"_id": 0})
-    if not doc:
-        return jsonify([])
-    st     = doc.get("status", {})
-    alerts = []
-    last_seen = doc.get("last_seen")
-    if isinstance(last_seen, datetime):
-        age_s = (datetime.utcnow() - last_seen).total_seconds()
-        if age_s > 10:
-            alerts.append({"code": "STALE_DATA", "msg": f"No packet for {int(age_s)}s", "level": "error"})
-    if not st.get("gnss_fix"):
-        alerts.append({"code": "GNSS_NO_FIX", "msg": "No GNSS fix", "level": "warning"})
-    if (st.get("sats") or 0) < 6:
-        alerts.append({"code": "GNSS_WEAK", "msg": f"Only {st.get('sats',0)} satellites", "level": "warning"})
-    if (st.get("hdop") or 99) > 2.0:
-        alerts.append({"code": "GNSS_ACCURACY_LOW", "msg": f"HDOP {st.get('hdop',99):.1f}", "level": "warning"})
-    if (st.get("wifi_rssi_dbm") or -127) < -80:
-        alerts.append({"code": "SIGNAL_WEAK", "msg": f"RSSI {st.get('wifi_rssi_dbm')} dBm", "level": "warning"})
-    if not st.get("eskf_init"):
-        alerts.append({"code": "ESKF_NOT_INIT", "msg": "ESKF not initialized", "level": "info"})
-    bpct = st.get("battery_pct", -1)
-    if bpct is not None and 0 <= bpct < 20:
-        alerts.append({"code": "LOW_BATTERY", "msg": f"Battery {bpct}%", "level": "error"})
-    return jsonify(alerts)
-
-
-# ── AI latest ─────────────────────────────────────────────────────────────────
-@app.route("/api/v1/ai/latest/<device_id>")
-@jwt_required()
-def api_ai_latest(device_id):
-    doc = db.ai_sequences.find_one(
-        {"device_id": device_id},
-        {"_id": 0, "features": 0},
-        sort=[("t_end", DESCENDING)]
-    )
-    if not doc:
-        return jsonify({"driver_score": None, "anomaly_flag": False, "model_version": "none"})
-    for k in ("t_start", "t_end"):
-        if isinstance(doc.get(k), datetime):
-            doc[k] = doc[k].isoformat()
-    return jsonify(doc)
-
-
-# ── CSV export ────────────────────────────────────────────────────────────────
-@app.route("/api/v1/session/export")
-@role_required("analyst")
-def api_session_export():
-    device_id  = request.args.get("device_id")
-    session_id = request.args.get("session_id")
-    if not device_id or not session_id:
-        return jsonify({"error": "device_id and session_id required"}), 400
-
-    query = {"device_id": device_id, "session_id": session_id}
-    gnss_docs = list(db.gnss_raw.find(query, {"_id": 0}).sort("t_ms", ASCENDING))
-    eskf_docs = list(db.eskf_state.find(query, {"_id": 0}).sort("t_ms", ASCENDING))
-    imu_docs  = list(db.imu_raw.find(query, {"_id": 0}).sort("t_ms", ASCENDING))
-
-    # Index by t_ms for alignment
-    eskf_idx = {d["t_ms"]: d for d in eskf_docs if d.get("t_ms")}
-    imu_idx  = {d["t_ms"]: d for d in imu_docs  if d.get("t_ms")}
-
-    output = io.StringIO()
-    writer = csv.writer(output)
-    writer.writerow([
-        "t_ms", "t_server",
-        "gnss_lat", "gnss_lon", "gnss_alt", "gnss_speed", "gnss_course",
-        "gnss_sats", "gnss_hdop", "gnss_fix_type",
-        "eskf_lat", "eskf_lon", "eskf_alt",
-        "eskf_vE", "eskf_vN", "eskf_vU",
-        "eskf_roll", "eskf_pitch", "eskf_yaw",
-        "accel_x", "accel_y", "accel_z",
-        "gyro_x", "gyro_y", "gyro_z",
-    ])
-    for g in gnss_docs:
-        t  = g.get("t_ms")
-        e  = eskf_idx.get(t, {})
-        im = imu_idx.get(t, {})
-        am = im.get("accel_mps2") or []
-        gm = im.get("gyro_radps") or []
-        ts = g.get("t_server")
-        writer.writerow([
-            t, ts.isoformat() if isinstance(ts, datetime) else ts,
-            g.get("lat"), g.get("lon"), g.get("alt"),
-            g.get("speed"), g.get("course"),
-            g.get("sats"), g.get("hdop"), g.get("fix_type"),
-            e.get("lat"), e.get("lon"), e.get("alt"),
-            e.get("vE"), e.get("vN"), e.get("vU"),
-            e.get("roll"), e.get("pitch"), e.get("yaw"),
-            am[0] if len(am) > 0 else None,
-            am[1] if len(am) > 1 else None,
-            am[2] if len(am) > 2 else None,
-            gm[0] if len(gm) > 0 else None,
-            gm[1] if len(gm) > 1 else None,
-            gm[2] if len(gm) > 2 else None,
-        ])
-
-    fname = f"tru-track-{device_id.replace(':','-')}-{session_id[-8:]}.csv"
-    return Response(
-        output.getvalue(),
-        mimetype="text/csv",
-        headers={"Content-Disposition": f"attachment; filename={fname}"}
-    )
-
-
-# ── GeoJSON export ────────────────────────────────────────────────────────────
-@app.route("/api/v1/session/geojson")
-@jwt_required()
-def api_session_geojson():
-    device_id  = request.args.get("device_id")
-    session_id = request.args.get("session_id")
-    if not device_id or not session_id:
-        return jsonify({"error": "device_id and session_id required"}), 400
-
-    query = {"device_id": device_id, "session_id": session_id}
-    gnss_pts = [
-        [d["lon"], d["lat"], d.get("alt", 0)]
-        for d in db.gnss_raw.find(query, {"_id": 0, "lat": 1, "lon": 1, "alt": 1})
-                             .sort("t_ms", ASCENDING)
-        if d.get("lat") and d.get("lon") and not (d["lat"] == 0 and d["lon"] == 0)
-    ]
-    eskf_pts = [
-        [d["lon"], d["lat"], d.get("alt", 0)]
-        for d in db.eskf_state.find(query, {"_id": 0, "lat": 1, "lon": 1, "alt": 1})
-                               .sort("t_ms", ASCENDING)
-        if d.get("lat") and d.get("lon")
-    ]
-    fc = {
-        "type": "FeatureCollection",
-        "features": [
-            {"type": "Feature", "geometry": {"type": "LineString", "coordinates": gnss_pts},
-             "properties": {"name": "GNSS track", "color": "#FF4444"}},
-            {"type": "Feature", "geometry": {"type": "LineString", "coordinates": eskf_pts},
-             "properties": {"name": "ESKF track", "color": "#4488FF"}},
-        ]
-    }
-    fname = f"tru-track-{device_id.replace(':','-')}-{session_id[-8:]}.geojson"
-    return Response(
-        json.dumps(fc),
-        mimetype="application/geo+json",
-        headers={"Content-Disposition": f"attachment; filename={fname}"}
-    )
-
-# ── Start ─────────────────────────────────────────────────────────────────────
+# ─────────────────────────────────────────────────────────────────────────────
+# MAIN
+# ─────────────────────────────────────────────────────────────────────────────
 if __name__ == "__main__":
-    logging.info(f"TRU-TRACK backend starting on port {SERVER_PORT}")
-    sio.run(app, host="127.0.0.1", port=SERVER_PORT,
-            debug=False, allow_unsafe_werkzeug=True)
+    socketio.run(app, host=SERVER_HOST, port=SERVER_PORT, allow_unsafe_werkzeug=True)
