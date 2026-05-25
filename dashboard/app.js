@@ -148,6 +148,8 @@ async function onSessionChange(sessionId) {
   if (sessionId === "live") {
     setExportButtons(false);
     document.getElementById("session-info").textContent = `LIVE — ${selectedDevice}`;
+    setConnectionStatus("live", "Awaiting packets…");
+    if (!socket) initSocket();
     joinDeviceRoom(selectedDevice);
     startPolling(selectedDevice);
   } else {
