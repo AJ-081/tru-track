@@ -521,8 +521,19 @@ def _live_emitter():
                     "lon":             {"$nin": [None, 0]},
                 },
                 {"_id":0,"device_id":1,"lat":1,"lon":1,"alt":1,
-                 "vE":1,"vN":1,"vU":1,"t_server":1,"t_ms":1}
+                 "vE":1,"vN":1,"vU":1,"t_server":1,"t_ms":1,"session_id":1}
             ).sort("t_server", 1))
+
+            # Build t_ms → gnss lookup for this batch
+            tms_list = [d.get("t_ms") for d in docs if d.get("t_ms") is not None]
+            gnss_by_tms = {}
+            if tms_list:
+                for g in db.gnss_raw.find(
+                    {"t_ms": {"$in": tms_list}, "fix_valid": True,
+                     "lat":  {"$nin": [None, 0]}, "lon": {"$nin": [None, 0]}},
+                    {"_id":0,"t_ms":1,"lat":1,"lon":1}
+                ):
+                    gnss_by_tms[g["t_ms"]] = g
 
             for doc in docs:
                 did  = doc.get("device_id")
@@ -532,15 +543,19 @@ def _live_emitter():
                 if last_seen.get(did) and tsrv <= last_seen[did]:
                     continue
                 last_seen[did] = tsrv
+                g = gnss_by_tms.get(doc.get("t_ms"), {})
                 socketio.emit("live_eskf", {
-                    "device_id": did,
-                    "lat":  doc.get("lat"),
-                    "lon":  doc.get("lon"),
-                    "alt":  doc.get("alt"),
-                    "vE":   doc.get("vE"),
-                    "vN":   doc.get("vN"),
-                    "vU":   doc.get("vU"),
-                    "t_ms": doc.get("t_ms"),
+                    "device_id":  did,
+                    "lat":        doc.get("lat"),
+                    "lon":        doc.get("lon"),
+                    "alt":        doc.get("alt"),
+                    "vE":         doc.get("vE"),
+                    "vN":         doc.get("vN"),
+                    "vU":         doc.get("vU"),
+                    "t_ms":       doc.get("t_ms"),
+                    "gnss_lat":   g.get("lat"),
+                    "gnss_lon":   g.get("lon"),
+                    "gnss_valid": bool(g),
                 }, room=did)
         except Exception:
             pass

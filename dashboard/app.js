@@ -213,6 +213,9 @@ function connectSocket() {
       eskfPolyline.addLatLng([doc.lat, doc.lon]);
       gmap.panTo([doc.lat, doc.lon]);
     }
+    if (mapReady && gnssPolyline && doc.gnss_valid && doc.gnss_lat && doc.gnss_lon) {
+      gnssPolyline.addLatLng([doc.gnss_lat, doc.gnss_lon]);
+    }
   });
 }
 
