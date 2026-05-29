@@ -563,8 +563,6 @@ def _live_emitter():
 
 _threading.Thread(target=_live_emitter, daemon=True).start()
 
-if __name__ == "__main__":
-    socketio.run(app, host=SERVER_HOST, port=SERVER_PORT, allow_unsafe_werkzeug=True)
 
 # ── FLEET ─────────────────────────────────────────────────────────────────────
 def _fleet():
@@ -626,3 +624,5 @@ def _fleet():
 @jwt_required(optional=True)
 def fleet():
     return _fleet()
+if __name__ == "__main__":
+    socketio.run(app, host=SERVER_HOST, port=SERVER_PORT, allow_unsafe_werkzeug=True)
