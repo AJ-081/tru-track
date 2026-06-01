@@ -4,509 +4,552 @@
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
 <title>TRU-TRACK — Fleet</title>
-<link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@500;700&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script src="/socket.io/socket.io.js"></script>
 <style>
 *{margin:0;padding:0;box-sizing:border-box}
 :root{
-  --bg:#0a0b0d;--card:rgba(15,17,22,0.97);--border:rgba(255,255,255,0.07);
-  --border2:rgba(255,255,255,0.12);--text:#f0f1f3;--muted:#6b7280;
-  --accent:#00f2fe;--accent2:#2d8cff;
-  --green:#00e887;--yellow:#ffb800;--red:#ff4444;--purple:#a855f7;
+  --bg:#080a0d;--card:#0e1014;--border:rgba(255,255,255,0.07);
+  --border2:rgba(255,255,255,0.13);--text:#f0f1f3;--muted:#5a6270;
+  --green:#00e887;--yellow:#ffb800;--red:#ff4444;
   --font:'Inter',sans-serif;--mono:'JetBrains Mono',monospace;
 }
 html,body{height:100%;overflow:hidden;background:var(--bg);color:var(--text);font-family:var(--font)}
-
-/* ── Layout ─────────────────────────────────────────────────────── */
 .app{display:flex;height:100vh}
+
+/* ── Map ───────────────────────────────────────────────── */
 #map{flex:1;height:100vh}
-.sidebar{width:310px;flex-shrink:0;height:100vh;background:var(--card);
-  border-right:1px solid var(--border);display:flex;flex-direction:column;z-index:1000;
-  backdrop-filter:blur(20px)}
 
-/* ── Header ─────────────────────────────────────────────────────── */
-.header{padding:14px 14px 12px;border-bottom:1px solid var(--border);display:flex;align-items:center;gap:9px}
-.logo{width:30px;height:30px;border-radius:8px;background:linear-gradient(135deg,#00f2fe,#2d8cff);
-      display:flex;align-items:center;justify-content:center;font-size:10px;font-weight:800;color:#000;flex-shrink:0}
-.h-title{font-size:13px;font-weight:800;letter-spacing:-0.2px}
-.h-sub{font-size:9px;color:var(--muted);margin-top:1px}
-.back-btn{margin-left:auto;padding:4px 9px;border-radius:6px;background:rgba(255,255,255,0.04);
-  border:1px solid var(--border);color:var(--muted);font-size:9px;cursor:pointer;
-  text-decoration:none;transition:all 0.15s;white-space:nowrap;font-family:var(--font)}
-.back-btn:hover{color:var(--text);border-color:var(--border2)}
+/* ── Sidebar ───────────────────────────────────────────── */
+.sidebar{
+  width:290px;flex-shrink:0;height:100vh;
+  background:var(--card);border-right:1px solid var(--border);
+  display:flex;flex-direction:column;z-index:1000;
+}
 
-/* ── Stat bar ───────────────────────────────────────────────────── */
-.stats-bar{display:grid;grid-template-columns:repeat(3,1fr);border-bottom:1px solid var(--border);background:rgba(0,0,0,0.2)}
+/* Header */
+.hdr{padding:14px 14px 12px;border-bottom:1px solid var(--border);
+  display:flex;align-items:center;gap:9px}
+.logo{width:32px;height:32px;border-radius:9px;
+  background:linear-gradient(135deg,#00f2fe,#2d8cff);
+  display:flex;align-items:center;justify-content:center;
+  font-size:11px;font-weight:800;color:#000;flex-shrink:0}
+.hdr-text{flex:1}
+.hdr-t{font-size:13px;font-weight:800;letter-spacing:-0.2px}
+.hdr-s{font-size:9px;color:var(--muted);margin-top:1px}
+.back{padding:4px 9px;border-radius:6px;
+  background:rgba(255,255,255,0.04);border:1px solid var(--border);
+  color:var(--muted);font-size:9px;text-decoration:none;
+  transition:all 0.15s;white-space:nowrap}
+.back:hover{color:var(--text);border-color:var(--border2)}
+
+/* Stats */
+.stats{display:grid;grid-template-columns:repeat(3,1fr);
+  border-bottom:1px solid var(--border)}
 .stat{padding:10px 0;text-align:center}
-.stat-num{font-size:20px;font-weight:800;font-family:var(--mono);display:block}
-.stat-label{font-size:8px;color:var(--muted);text-transform:uppercase;letter-spacing:0.6px;margin-top:1px;display:block}
+.stat-n{font-size:20px;font-weight:800;font-family:var(--mono);display:block}
+.stat-l{font-size:8px;color:var(--muted);text-transform:uppercase;
+  letter-spacing:0.6px;margin-top:1px;display:block}
 .g{color:var(--green)}.y{color:var(--yellow)}.r{color:var(--red)}
 
-/* ── Section heading ────────────────────────────────────────────── */
-.sec-head{padding:9px 13px 6px;font-size:8.5px;font-weight:700;text-transform:uppercase;
-          letter-spacing:0.7px;color:var(--muted);display:flex;align-items:center;justify-content:space-between}
-.sec-head span{display:flex;align-items:center;gap:5px}
-.refresh-pill{padding:2px 7px;border-radius:8px;background:rgba(0,242,254,0.07);
-              border:1px solid rgba(0,242,254,0.15);color:var(--accent);font-size:8px;cursor:pointer;transition:all 0.15s}
-.refresh-pill:hover{background:rgba(0,242,254,0.16)}
+/* Action buttons */
+.actions{display:flex;gap:6px;padding:9px 10px;border-bottom:1px solid var(--border)}
+.btn{flex:1;padding:7px 4px;border-radius:7px;font-size:9.5px;font-weight:600;
+  cursor:pointer;transition:all 0.15s;text-align:center;font-family:var(--font);border:1px solid}
+.btn-live{background:rgba(0,232,135,0.08);border-color:rgba(0,232,135,0.25);color:var(--green)}
+.btn-live:hover{background:rgba(0,232,135,0.18)}
+.btn-all{background:rgba(255,255,255,0.04);border-color:var(--border2);color:var(--text)}
+.btn-all:hover{background:rgba(255,255,255,0.09)}
+.btn-none{background:rgba(255,68,68,0.05);border-color:rgba(255,68,68,0.2);color:var(--red)}
+.btn-none:hover{background:rgba(255,68,68,0.12)}
 
-/* ── Device list ────────────────────────────────────────────────── */
-.device-list{overflow-y:auto;max-height:220px;padding:0 8px 8px}
-.device-list::-webkit-scrollbar{width:2px}
-.device-list::-webkit-scrollbar-thumb{background:var(--border)}
+/* Device list */
+.sec-label{padding:7px 12px 4px;font-size:8px;font-weight:700;
+  text-transform:uppercase;letter-spacing:0.8px;color:var(--muted)}
+.dlist{overflow-y:auto;flex:1;padding:0 8px 8px}
+.dlist::-webkit-scrollbar{width:2px}
+.dlist::-webkit-scrollbar-thumb{background:var(--border2)}
 
-.dcard{display:flex;align-items:center;gap:8px;padding:9px 10px;border-radius:8px;
-       margin-bottom:5px;border:1px solid var(--border);cursor:pointer;transition:all 0.15s;
-       background:rgba(255,255,255,0.02);position:relative;overflow:hidden}
-.dcard::before{content:'';position:absolute;left:0;top:0;bottom:0;width:2.5px;border-radius:2px}
-.dcard.live::before{background:var(--green)}
-.dcard.stale::before{background:var(--yellow)}
-.dcard.offline::before{background:var(--red)}
-.dcard:hover{background:rgba(255,255,255,0.05);border-color:var(--border2)}
-.dcard.active{border-color:var(--accent);background:rgba(0,242,254,0.04)}
+/* Device card */
+.dcard{display:flex;align-items:center;gap:0;padding:0;
+  border-radius:9px;margin-bottom:6px;border:1px solid var(--border);
+  background:rgba(255,255,255,0.015);overflow:hidden;
+  transition:border-color 0.15s}
+.dcard.checked{border-color:var(--accent, #666)}
+.dcard:hover{border-color:var(--border2)}
+
+/* Checkbox area */
+.cb-wrap{padding:12px 10px 12px 12px;display:flex;align-items:center;cursor:pointer;flex-shrink:0}
+.cb{width:16px;height:16px;border-radius:4px;border:1.5px solid var(--border2);
+  display:flex;align-items:center;justify-content:center;flex-shrink:0;
+  transition:all 0.15s;cursor:pointer}
+.cb.on{border-color:transparent}
+.cb svg{display:none}
+.cb.on svg{display:block}
+
+/* Device info */
+.d-info{flex:1;padding:10px 10px 10px 0;min-width:0;cursor:pointer}
+.d-top{display:flex;align-items:center;gap:6px;margin-bottom:5px}
 .d-dot{width:7px;height:7px;border-radius:50%;flex-shrink:0}
-.d-dot.live{background:var(--green);box-shadow:0 0 6px var(--green)}
-.d-dot.stale{background:var(--yellow)}.d-dot.offline{background:var(--red)}
-.d-info{flex:1;min-width:0}
-.d-id{font-size:10.5px;font-weight:700;font-family:var(--mono);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.d-meta{font-size:8.5px;color:var(--muted);margin-top:1px}
-.d-badge{font-size:8px;font-weight:700;padding:2px 6px;border-radius:8px;text-transform:uppercase;flex-shrink:0}
+.d-dot.live{box-shadow:0 0 6px currentColor}
+.d-id{font-size:10px;font-weight:700;font-family:var(--mono);
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis;flex:1}
+.d-badge{font-size:8px;font-weight:700;padding:2px 6px;border-radius:8px;
+  text-transform:uppercase;flex-shrink:0}
 .d-badge.live{background:rgba(0,232,135,0.1);color:var(--green)}
 .d-badge.stale{background:rgba(255,184,0,0.1);color:var(--yellow)}
-.d-badge.offline{background:rgba(255,68,68,0.08);color:var(--red)}
+.d-badge.offline{background:rgba(255,68,68,0.07);color:var(--red)}
+.d-stats{display:grid;grid-template-columns:1fr 1fr;gap:3px 10px}
+.d-stat{display:flex;flex-direction:column;gap:0}
+.d-stat-l{font-size:7.5px;color:var(--muted);text-transform:uppercase;letter-spacing:0.3px}
+.d-stat-v{font-size:9px;font-family:var(--mono)}
+.d-pkts{font-size:8px;color:var(--muted);margin-top:4px;font-family:var(--mono)}
 
-/* ── Session picker ─────────────────────────────────────────────── */
-.session-section{border-top:1px solid var(--border);padding:8px}
-select{width:100%;background:#111316;color:var(--text);border:1px solid var(--border2);
-       border-radius:7px;padding:8px 10px;font-size:10px;font-family:var(--mono);outline:none;cursor:pointer}
-select:focus{border-color:var(--accent)}
-select option{background:#111316}
+/* Color strip */
+.d-strip{width:3px;flex-shrink:0;align-self:stretch}
 
-.track-btns{display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-top:7px}
-.tbtn{padding:7px 4px;border-radius:7px;border:1px solid var(--border2);background:rgba(255,255,255,0.03);
-      color:var(--muted);font-size:9px;font-weight:600;cursor:pointer;transition:all 0.15s;text-align:center;font-family:var(--font)}
-.tbtn:hover{background:rgba(255,255,255,0.08);color:var(--text)}
-.tbtn.active-gnss{background:rgba(255,59,48,0.1);border-color:rgba(255,59,48,0.4);color:#ff3b30}
-.tbtn.active-eskf{background:rgba(45,140,255,0.1);border-color:rgba(45,140,255,0.4);color:#2d8cff}
+/* Refresh bar */
+.rfr{padding:7px 10px;border-top:1px solid var(--border);
+  display:flex;align-items:center;justify-content:space-between;flex-shrink:0}
+.rfr-l{font-size:8.5px;color:var(--muted)}
+.rfr-t{font-family:var(--mono);color:#00f2fe;font-size:8.5px}
+.rfr-btn{padding:3px 8px;border-radius:5px;
+  background:rgba(0,242,254,0.07);border:1px solid rgba(0,242,254,0.18);
+  color:#00f2fe;font-size:8.5px;cursor:pointer;font-family:var(--font)}
+.rfr-btn:hover{background:rgba(0,242,254,0.16)}
 
-/* ── Device info panel ──────────────────────────────────────────── */
-.info-panel{border-top:1px solid var(--border);padding:8px 10px;flex:1;overflow-y:auto}
-.info-panel::-webkit-scrollbar{width:2px}
-.info-row{display:flex;justify-content:space-between;align-items:center;padding:4px 0;border-bottom:1px solid rgba(255,255,255,0.03)}
-.info-row:last-child{border-bottom:none}
-.info-lbl{font-size:8.5px;color:var(--muted);text-transform:uppercase;letter-spacing:0.4px}
-.info-val{font-size:9.5px;font-family:var(--mono)}
-.info-val.ok{color:var(--green)}.info-val.warn{color:var(--yellow)}.info-val.bad{color:var(--red)}
+/* Footer */
+.ftr{padding:7px 12px;border-top:1px solid var(--border);
+  display:flex;justify-content:space-between;align-items:center;flex-shrink:0}
+.ftr-t{font-size:8.5px;color:var(--muted);font-family:var(--mono)}
 
-/* ── Status bar ─────────────────────────────────────────────────── */
-.status-bar{padding:8px 13px;border-top:1px solid var(--border);display:flex;align-items:center;justify-content:space-between;flex-shrink:0}
-.status-time{font-size:9px;color:var(--muted);font-family:var(--mono)}
-.status-txt{font-size:9px;color:var(--muted)}
+/* Map overlays */
+.map-wrap{position:relative;flex:1}
+.fit-btn{position:absolute;top:12px;right:12px;z-index:1000;
+  padding:8px 12px;border-radius:8px;
+  background:rgba(10,11,13,0.92);backdrop-filter:blur(12px);
+  border:1px solid var(--border2);color:var(--text);font-size:10px;
+  font-weight:600;cursor:pointer;font-family:var(--font);
+  transition:all 0.15s}
+.fit-btn:hover{background:rgba(255,255,255,0.1)}
 
-/* ── Map track legend ───────────────────────────────────────────── */
-.map-legend{position:absolute;bottom:24px;right:12px;z-index:1000;background:rgba(10,11,13,0.9);
-            backdrop-filter:blur(12px);border:1px solid var(--border2);border-radius:9px;padding:10px 13px;
-            display:flex;flex-direction:column;gap:5px;min-width:140px}
-.legend-row{display:flex;align-items:center;gap:7px;font-size:9px;color:var(--muted)}
-.legend-line{width:22px;height:3px;border-radius:2px}
+/* Legend */
+.legend{position:absolute;bottom:22px;right:12px;z-index:1000;
+  background:rgba(10,11,13,0.92);backdrop-filter:blur(12px);
+  border:1px solid var(--border2);border-radius:9px;padding:10px 13px;
+  min-width:120px}
+.leg-row{display:flex;align-items:center;gap:7px;
+  font-size:8.5px;color:var(--muted);margin-bottom:4px}
+.leg-row:last-child{margin-bottom:0}
+.leg-line{width:18px;height:3px;border-radius:2px;flex-shrink:0}
 
-/* ── Leaflet popup ──────────────────────────────────────────────── */
+/* Popup */
 .leaflet-popup-content-wrapper{background:rgba(12,14,20,0.96)!important;
-  border:1px solid rgba(0,242,254,0.2)!important;border-radius:10px!important;
+  border:1px solid rgba(255,255,255,0.12)!important;border-radius:10px!important;
   box-shadow:0 12px 40px rgba(0,0,0,0.6)!important}
 .leaflet-popup-content{margin:0!important;padding:0!important}
 .leaflet-popup-tip{background:rgba(12,14,20,0.96)!important}
-.leaflet-popup-close-button{color:rgba(255,255,255,0.5)!important;top:8px!important;right:8px!important}
-.popup-body{padding:12px 14px;min-width:190px}
-.popup-top{display:flex;align-items:center;gap:7px;margin-bottom:9px}
-.popup-dot{width:8px;height:8px;border-radius:50%;flex-shrink:0}
-.popup-id{font-family:var(--mono);font-size:10px;font-weight:700;color:#fff}
-.popup-row{display:flex;justify-content:space-between;margin-bottom:4px}
-.pl{font-size:8.5px;color:#6b7280;text-transform:uppercase;letter-spacing:0.4px}
+.leaflet-popup-close-button{color:rgba(255,255,255,0.4)!important;top:7px!important;right:7px!important}
+.pop{padding:12px 14px;min-width:170px}
+.pop-top{display:flex;align-items:center;gap:7px;margin-bottom:9px}
+.pop-dot{width:9px;height:9px;border-radius:50%;flex-shrink:0}
+.pop-id{font-family:var(--mono);font-size:10px;font-weight:700;color:#fff}
+.pr{display:flex;justify-content:space-between;margin-bottom:4px}
+.pl{font-size:8px;color:#6b7280;text-transform:uppercase;letter-spacing:0.4px}
 .pv{font-size:9px;font-family:var(--mono);color:#e5e7eb}
-.popup-select-btn{margin-top:10px;width:100%;padding:6px;border-radius:7px;
-  background:rgba(0,242,254,0.08);border:1px solid rgba(0,242,254,0.2);
-  color:#00f2fe;font-size:9px;font-weight:600;cursor:pointer;font-family:var(--font);transition:all 0.15s}
-.popup-select-btn:hover{background:rgba(0,242,254,0.18)}
 
-/* ── Loading ────────────────────────────────────────────────────── */
-.loading{position:fixed;inset:0;background:var(--bg);z-index:9999;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:14px}
-.spinner{width:32px;height:32px;border:2.5px solid var(--border);border-top-color:var(--accent);border-radius:50%;animation:spin 0.7s linear infinite}
-@keyframes spin{to{transform:rotate(360deg)}}
+/* Loading */
+.loading{position:fixed;inset:0;background:var(--bg);z-index:9999;
+  display:flex;flex-direction:column;align-items:center;justify-content:center;gap:14px}
+.spin{width:30px;height:30px;border:2.5px solid var(--border);
+  border-top-color:#00f2fe;border-radius:50%;animation:sp 0.7s linear infinite}
+@keyframes sp{to{transform:rotate(360deg)}}
 .loading p{font-size:11px;color:var(--muted)}
-
-.empty{padding:20px;text-align:center;color:var(--muted);font-size:11px}
 </style>
 </head>
 <body>
 
-<div class="loading" id="loading"><div class="spinner"></div><p>Loading fleet…</p></div>
+<div class="loading" id="loading"><div class="spin"></div><p>Loading fleet…</p></div>
 
 <div class="app" id="app" style="display:none">
-  <!-- SIDEBAR -->
-  <div class="sidebar">
-    <div class="header">
-      <div class="logo">TT</div>
-      <div><div class="h-title">TRU-TRACK Fleet</div><div class="h-sub">Live fleet &amp; session tracking</div></div>
-      <a class="back-btn" href="/">← Dashboard</a>
-    </div>
-
-    <div class="stats-bar">
-      <div class="stat"><span class="stat-num" id="s-total">—</span><span class="stat-label">Devices</span></div>
-      <div class="stat"><span class="stat-num g" id="s-live">—</span><span class="stat-label">Live</span></div>
-      <div class="stat"><span class="stat-num r" id="s-off">—</span><span class="stat-label">Offline</span></div>
-    </div>
-
-    <!-- DEVICE LIST -->
-    <div class="sec-head">
-      <span>📡 Devices</span>
-      <span class="refresh-pill" onclick="doFleetRefresh()">↻ <span id="cd">5s</span></span>
-    </div>
-    <div class="device-list" id="device-list"><div class="empty">Loading…</div></div>
-
-    <!-- SESSION PICKER -->
-    <div class="session-section">
-      <div class="sec-head" style="padding:0 0 6px 0">
-        <span>📂 Session — <span id="sel-dev-label" style="color:var(--accent);font-family:var(--mono)">select a device</span></span>
-      </div>
-      <select id="session-sel" disabled>
-        <option value="">— select a device first —</option>
-      </select>
-      <div class="track-btns">
-        <button class="tbtn" id="btn-gnss"  onclick="toggleTrack('gnss')">● GNSS track</button>
-        <button class="tbtn" id="btn-eskf"  onclick="toggleTrack('eskf')">● ESKF track</button>
-      </div>
-    </div>
-
-    <!-- DEVICE INFO -->
-    <div class="sec-head" style="border-top:1px solid var(--border);padding-top:9px">
-      <span>ℹ Device info</span>
-    </div>
-    <div class="info-panel" id="info-panel">
-      <div class="empty" style="padding:12px 0">Select a device to view details</div>
-    </div>
-
-    <div class="status-bar">
-      <span class="status-time" id="f-time">—</span>
-      <span class="status-txt" id="f-txt">—</span>
-    </div>
+  <!-- MAP -->
+  <div class="map-wrap">
+    <div id="map" style="width:100%;height:100vh"></div>
+    <button class="fit-btn" onclick="fitAll()">⊡ Fit all</button>
+    <div class="legend" id="legend" style="display:none"></div>
   </div>
 
-  <!-- MAP -->
-  <div style="position:relative;flex:1">
-    <div id="map" style="width:100%;height:100vh"></div>
-    <div class="map-legend">
-      <div class="legend-row"><div class="legend-line" style="background:#00e887"></div>GNSS track</div>
-      <div class="legend-row"><div class="legend-line" style="background:#2d8cff"></div>ESKF track</div>
-      <div class="legend-row"><div class="legend-line" style="background:#00e887;border-radius:50%;width:10px;height:10px"></div>Live device</div>
-      <div class="legend-row"><div class="legend-line" style="background:#ffb800;border-radius:50%;width:10px;height:10px"></div>Stale / no fix</div>
-      <div class="legend-row"><div class="legend-line" style="background:#ff4444;border-radius:50%;width:10px;height:10px"></div>Offline</div>
+  <!-- SIDEBAR -->
+  <div class="sidebar">
+    <div class="hdr">
+      <div class="logo">TT</div>
+      <div class="hdr-text">
+        <div class="hdr-t">Fleet Map</div>
+        <div class="hdr-s">Multi-device live tracking</div>
+      </div>
+      <a class="back" href="/">← Dashboard</a>
+    </div>
+
+    <div class="stats">
+      <div class="stat"><span class="stat-n g" id="s-live">—</span><span class="stat-l">Live</span></div>
+      <div class="stat"><span class="stat-n y" id="s-sel">—</span><span class="stat-l">Selected</span></div>
+      <div class="stat"><span class="stat-n" id="s-pkt" style="color:#00f2fe">—</span><span class="stat-l">Pkts/s</span></div>
+    </div>
+
+    <div class="actions">
+      <button class="btn btn-live" onclick="selectLive()">● Show live</button>
+      <button class="btn btn-all"  onclick="selectAll()">☑ All</button>
+      <button class="btn btn-none" onclick="selectNone()">☐ None</button>
+    </div>
+
+    <div class="sec-label">Devices</div>
+    <div class="dlist" id="dlist"><div style="padding:16px;text-align:center;color:var(--muted);font-size:11px">Loading…</div></div>
+
+    <div class="rfr">
+      <span class="rfr-l">Refresh <span class="rfr-t" id="cd">5s</span></span>
+      <button class="rfr-btn" onclick="doFleet()">↻ Now</button>
+    </div>
+
+    <div class="ftr">
+      <span class="ftr-t" id="ftr-t">—</span>
+      <span class="ftr-t" id="ftr-s">—</span>
     </div>
   </div>
 </div>
 
 <script>
-const token = localStorage.getItem('access_token');
-function api(url) {
-  const h = {'Content-Type':'application/json'};
-  if (token) h['Authorization'] = 'Bearer ' + token;
-  return fetch(url, {headers:h, cache:'no-store'});
+const token = localStorage.getItem('tt_access_token');
+function api(u){
+  const h={'Content-Type':'application/json'};
+  if(token) h['Authorization']='Bearer '+token;
+  return fetch(u,{headers:h,cache:'no-store'});
 }
 
-// ── IST helpers ───────────────────────────────────────────────────
-function nowIST() {
-  return new Date().toLocaleTimeString('en-IN',{timeZone:'Asia/Kolkata',hour12:false,
-    hour:'2-digit',minute:'2-digit',second:'2-digit'}) + ' IST';
-}
-function ageStr(s) {
-  if (s == null) return '—';
-  if (s < 60)   return s.toFixed(0) + 's ago';
-  if (s < 3600) return (s/60).toFixed(0) + 'm ago';
-  return (s/3600).toFixed(1) + 'h ago';
+// ── Colour palette ─────────────────────────────────────
+const PALETTE = [
+  '#2d8cff','#00e887','#f97316','#a855f7',
+  '#eab308','#ec4899','#06b6d4','#ef4444'
+];
+let colorIdx = 0;
+const deviceColors = {};
+function getColor(did){
+  if(!deviceColors[did]) deviceColors[did] = PALETTE[(colorIdx++)%PALETTE.length];
+  return deviceColors[did];
 }
 
-// ── Map init ──────────────────────────────────────────────────────
+// ── Helpers ─────────────────────────────────────────────
+function nowIST(){
+  return new Date().toLocaleTimeString('en-IN',{
+    timeZone:'Asia/Kolkata',hour12:false,
+    hour:'2-digit',minute:'2-digit',second:'2-digit'
+  })+' IST';
+}
+function ageStr(s){
+  if(s==null)return '—';
+  if(s<60)  return s.toFixed(0)+'s ago';
+  if(s<3600)return (s/60).toFixed(0)+'m ago';
+  return (s/3600).toFixed(1)+'h ago';
+}
+
+// ── State ────────────────────────────────────────────────
+let fleetData   = [];
+let selected    = new Set();   // checked device_ids
+let countdown   = 5;
+let cdTimer     = null;
+let pktRates    = {};
+let pktCounts   = {};
+let pktTimer    = null;
+
+// Per-device map objects (always created for all devices with position)
+let devMarkers    = {};   // device_id → L.marker
+let devPolylines  = {};   // device_id → L.polyline
+
+// ── Map ──────────────────────────────────────────────────
 const map = L.map('map',{zoomControl:true,attributionControl:false});
 L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',{maxZoom:20}).addTo(map);
 L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_only_labels/{z}/{x}/{y}{r}.png',{maxZoom:20,opacity:0.7}).addTo(map);
 map.setView([21.17,72.83],13);
 
-// ── State ─────────────────────────────────────────────────────────
-let fleetData      = [];
-let deviceMarkers  = {};
-let gnssPolyline   = L.polyline([],{color:'#00e887',weight:3,opacity:0.9}).addTo(map);
-let eskfPolyline   = L.polyline([],{color:'#2d8cff',weight:3,opacity:0.9}).addTo(map);
-let selectedId     = null;
-let selectedSessId = null;
-let showGnss       = true;
-let showEskf       = true;
-let countdown      = 5;
-let cdTimer        = null;
-let liveInterval   = null;
-
-function markerIcon(online, fix) {
-  const c = online==='live'?(fix?'#00e887':'#ffb800'):online==='stale'?'#ffb800':'#ff4444';
-  const sz = online==='live'?14:10;
-  const gw = online==='live'?`box-shadow:0 0 8px ${c},0 0 16px ${c}55;`:'';
+function mkMarkerIcon(col, online){
+  const sz = online==='live' ? 15 : 10;
+  const gw = online==='live' ? `box-shadow:0 0 8px ${col},0 0 18px ${col}55;` : '';
   return L.divIcon({
     className:'',
-    html:`<div style="width:${sz}px;height:${sz}px;border-radius:50%;background:${c};
-      border:2.5px solid rgba(255,255,255,0.85);${gw}transform:translate(-50%,-50%)"></div>`,
+    html:`<div style="width:${sz}px;height:${sz}px;border-radius:50%;
+      background:${col};border:2.5px solid rgba(255,255,255,0.9);${gw}
+      transform:translate(-50%,-50%)"></div>`,
     iconSize:[0,0],iconAnchor:[0,0]
   });
 }
 
-function popupHtml(d) {
-  const c = d.online==='live'?'#00e887':d.online==='stale'?'#ffb800':'#ff4444';
-  const gw = d.online==='live'?`box-shadow:0 0 6px ${c};`:'';
-  return `<div class="popup-body">
-    <div class="popup-top">
-      <div class="popup-dot" style="background:${c};${gw}"></div>
-      <div class="popup-id">${d.device_id}</div>
-    </div>
-    <div class="popup-row"><span class="pl">Status</span><span class="pv">${d.online.toUpperCase()}</span></div>
-    <div class="popup-row"><span class="pl">GNSS fix</span><span class="pv" style="color:${d.fix_valid?'#00e887':'#ffb800'}">${d.fix_valid?'✓ Valid':'✗ Lost'}</span></div>
-    <div class="popup-row"><span class="pl">Sats / HDOP</span><span class="pv">${d.sats??'—'} / ${d.hdop!=null?Number(d.hdop).toFixed(1):'—'}</span></div>
-    <div class="popup-row"><span class="pl">Speed</span><span class="pv">${d.speed_mps!=null?(Number(d.speed_mps)*3.6).toFixed(1)+' km/h':'—'}</span></div>
-    <div class="popup-row"><span class="pl">Last seen</span><span class="pv">${(d.last_seen_display||'—').split(' ').slice(1).join(' ')+' IST'}</span></div>
-    <div class="popup-row"><span class="pl">Age</span><span class="pv">${ageStr(d.age_s)}</span></div>
-    <button class="popup-select-btn" onclick="selectDevice('${d.device_id}')">Select this device →</button>
-  </div>`;
-}
-
-// ── Fleet fetch ───────────────────────────────────────────────────
-async function doFleetRefresh() {
-  clearInterval(cdTimer);
-  try {
-    const res = await api('/api/fleet');
-    if (res.status===401){window.location.href='/login';return;}
-    const data = await res.json();
-    if (Array.isArray(data)) renderFleet(data);
-  } catch(e) {
-    document.getElementById('f-txt').textContent = 'Connection error';
+function fitAll(){
+  const pts = [];
+  for(const did of Object.keys(devMarkers)){
+    const ll = devMarkers[did].getLatLng();
+    pts.push(ll);
   }
-  startCountdown();
+  for(const did of Object.keys(devPolylines)){
+    const lls = devPolylines[did].getLatLngs();
+    lls.forEach(ll=>pts.push(ll));
+  }
+  if(pts.length) map.fitBounds(L.latLngBounds(pts),{padding:[40,40]});
 }
 
-function startCountdown() {
-  countdown = 5;
-  document.getElementById('cd').textContent = '5s';
+// ── Socket.IO ─────────────────────────────────────────────
+let socket;
+try {
+  socket = io(window.location.origin,{transports:['websocket','polling']});
+} catch(e) {
+  console.warn('Socket.IO not available — live updates disabled');
+  socket = {on:()=>{}, emit:()=>{}};
+}
+
+socket.on('connect',()=>{
+  // Rejoin all selected rooms on reconnect
+  selected.forEach(did=> socket.emit('join_device',{device_id:did}));
+});
+
+socket.on('live_eskf',(doc)=>{
+  const did = doc.device_id;
+  if(!did || !selected.has(did)) return;
+
+  pktCounts[did] = (pktCounts[did]||0) + 1;
+  pktRates[did]  = (pktRates[did]||0) + 1;
+
+  if(doc.lat && doc.lon && Math.abs(doc.lat)>0.01){
+    // Update marker
+    if(devMarkers[did]) devMarkers[did].setLatLng([doc.lat,doc.lon]);
+    // Extend polyline
+    if(devPolylines[did]) devPolylines[did].addLatLng([doc.lat,doc.lon]);
+  }
+
+  // Update pkt counter in card
+  const el = document.getElementById(`pkt-${did}`);
+  if(el) el.textContent = `${pktCounts[did]} pkts`;
+});
+
+// Pkt/s counter
+pktTimer = setInterval(()=>{
+  const total = Object.values(pktRates).reduce((a,b)=>a+b,0);
+  document.getElementById('s-pkt').textContent = total;
+  pktRates = {};
+},1000);
+
+// ── Checkbox helpers ──────────────────────────────────────
+function setSelected(did, on){
+  if(on){
+    selected.add(did);
+    socket.emit('join_device',{device_id:did});
+    // Create polyline if doesn't exist
+    const col = getColor(did);
+    if(!devPolylines[did]){
+      devPolylines[did] = L.polyline([],{color:col,weight:3,opacity:0.9}).addTo(map);
+    } else {
+      devPolylines[did].addTo(map);
+    }
+  } else {
+    selected.delete(did);
+    // Remove polyline from map (keep data)
+    if(devPolylines[did]) map.removeLayer(devPolylines[did]);
+  }
+  updateCard(did);
+  updateStats();
+  renderLegend();
+}
+
+function updateCard(did){
+  const card = document.getElementById(`card-${did}`);
+  if(!card) return;
+  const cb   = card.querySelector('.cb');
+  const on   = selected.has(did);
+  const col  = getColor(did);
+  card.style.setProperty('--accent', col);
+  card.classList.toggle('checked', on);
+  cb.classList.toggle('on', on);
+  cb.style.background = on ? col : 'transparent';
+  const strip = card.querySelector('.d-strip');
+  if(strip) strip.style.background = on ? col : 'rgba(255,255,255,0.06)';
+}
+
+function updateStats(){
+  const live = fleetData.filter(d=>d.online==='live').length;
+  document.getElementById('s-live').textContent = live;
+  document.getElementById('s-sel').textContent  = selected.size;
+}
+
+// ── Bulk actions ──────────────────────────────────────────
+function selectLive(){
+  fleetData.forEach(d=>{ if(d.online==='live') setSelected(d.device_id,true); });
+}
+function selectAll(){
+  fleetData.forEach(d=>setSelected(d.device_id,true));
+}
+function selectNone(){
+  [...selected].forEach(did=>setSelected(did,false));
+}
+
+// ── Fleet fetch ───────────────────────────────────────────
+async function doFleet(){
   clearInterval(cdTimer);
-  cdTimer = setInterval(()=>{
+  try{
+    const res = await api('/api/fleet');
+    if(res.status===401){ window.location.href='/login'; return; }
+    const data = await res.json();
+    if(Array.isArray(data)) renderFleet(data);
+  }catch(e){
+    document.getElementById('ftr-s').textContent='Error';
+  }
+  startCD();
+}
+
+function startCD(){
+  countdown=5;
+  document.getElementById('cd').textContent='5s';
+  clearInterval(cdTimer);
+  cdTimer=setInterval(()=>{
     countdown--;
-    document.getElementById('cd').textContent = countdown+'s';
-    if (countdown<=0){clearInterval(cdTimer);doFleetRefresh();}
+    document.getElementById('cd').textContent=countdown+'s';
+    if(countdown<=0){clearInterval(cdTimer);doFleet();}
   },1000);
 }
 
-function renderFleet(devices) {
+function renderFleet(devices){
   fleetData = devices;
-  const live  = devices.filter(d=>d.online==='live').length;
-  const off   = devices.filter(d=>d.online!=='live').length;
-  document.getElementById('s-total').textContent = devices.length;
-  document.getElementById('s-live').textContent  = live;
-  document.getElementById('s-off').textContent   = off;
+  const order={live:0,stale:1,offline:2};
+  const sorted=[...devices].sort((a,b)=>(order[a.online]||9)-(order[b.online]||9));
 
-  const order = {live:0,stale:1,offline:2};
-  const sorted = [...devices].sort((a,b)=>(order[a.online]||9)-(order[b.online]||9));
+  // Assign colors
+  devices.forEach(d=>getColor(d.device_id));
 
-  const list = document.getElementById('device-list');
-  list.innerHTML = devices.length ? sorted.map(d=>{
-    const lastT = d.last_seen_display ? d.last_seen_display.split(' ').slice(1).join(' ')+' IST' : '—';
-    return `<div class="dcard ${d.lat&&d.lon?d.online:'offline'}${selectedId===d.device_id?' active':''}" onclick="selectDevice('${d.device_id}')">
-      <div class="d-dot ${d.lat&&d.lon?d.online:'offline'}"></div>
-      <div class="d-info">
-        <div class="d-id" title="${d.device_id}">${d.device_id}</div>
-        <div class="d-meta">${lastT} · ${ageStr(d.age_s)}</div>
+  // Update/create markers
+  const seen=new Set();
+  for(const d of devices){
+    const did=d.device_id, col=getColor(did);
+    seen.add(did);
+    if(d.lat&&d.lon){
+      const icon=mkMarkerIcon(col,d.online);
+      const pop=popHtml(d,col);
+      if(devMarkers[did]){
+        devMarkers[did].setLatLng([d.lat,d.lon]).setIcon(icon);
+        if(devMarkers[did].isPopupOpen()) devMarkers[did].getPopup().setContent(pop);
+      } else {
+        const m=L.marker([d.lat,d.lon],{icon}).addTo(map)
+          .bindPopup(pop,{maxWidth:200,minWidth:180});
+        m.on('click',()=>{});
+        devMarkers[did]=m;
+      }
+    }
+  }
+  // Remove gone devices
+  for(const did of Object.keys(devMarkers)){
+    if(!seen.has(did)){ map.removeLayer(devMarkers[did]); delete devMarkers[did]; }
+  }
+
+  // Render cards
+  const list=document.getElementById('dlist');
+  list.innerHTML = sorted.map(d=>{
+    const did=d.device_id, col=getColor(did);
+    const on=selected.has(did);
+    const lastT = d.last_seen_display
+      ? d.last_seen_display.split(' ').slice(1).join(' ')+' IST'
+      : '—';
+    const fixC  = d.fix_valid ? `color:${col}` : 'color:var(--yellow)';
+    const pkts  = pktCounts[did]||0;
+    return `<div class="dcard${on?' checked':''}" id="card-${did}" style="--accent:${col}">
+      <div class="d-strip" style="background:${on?col:'rgba(255,255,255,0.06)'}"></div>
+      <div class="cb-wrap" onclick="toggleCheck('${did}')">
+        <div class="cb${on?' on':''}" style="background:${on?col:'transparent'}">
+          <svg width="10" height="10" viewBox="0 0 10 10" fill="none">
+            <path d="M2 5l2.5 2.5L8 3" stroke="#000" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+          </svg>
+        </div>
       </div>
-      <div class="d-badge ${d.online}">${d.online}</div>
+      <div class="d-info" onclick="toggleCheck('${did}')">
+        <div class="d-top">
+          <div class="d-dot ${d.online}" style="color:${col};background:${col}"></div>
+          <div class="d-id" title="${did}">${did}</div>
+          <div class="d-badge ${d.online}">${d.online}</div>
+        </div>
+        <div class="d-stats">
+          <div class="d-stat">
+            <span class="d-stat-l">GNSS</span>
+            <span class="d-stat-v" style="${fixC}">${d.fix_valid?'✓ Fix':'✗ Lost'} · ${d.sats??'—'}sat</span>
+          </div>
+          <div class="d-stat">
+            <span class="d-stat-l">Last seen</span>
+            <span class="d-stat-v">${ageStr(d.age_s)}</span>
+          </div>
+          <div class="d-stat">
+            <span class="d-stat-l">WiFi</span>
+            <span class="d-stat-v">${d.wifi_rssi_dbm!=null?d.wifi_rssi_dbm+' dBm':'—'}</span>
+          </div>
+          <div class="d-stat">
+            <span class="d-stat-l">ESKF</span>
+            <span class="d-stat-v" style="color:${d.eskf_init?'var(--green)':'var(--yellow)'}">
+              ${d.eskf_init?'Ready':'Waiting'}
+            </span>
+          </div>
+        </div>
+        <div class="d-pkts" id="pkt-${did}">${pkts?pkts+' pkts':'—'}</div>
+      </div>
     </div>`;
-  }).join('') : `<div class="empty">No devices found</div>`;
+  }).join('') || `<div style="padding:16px;text-align:center;color:var(--muted);font-size:11px">No devices found</div>`;
 
-  // Update markers
-  const seen = new Set();
-  for (const d of devices) {
-    if (!d.lat||!d.lon) continue;
-    seen.add(d.device_id);
-    const ll   = [d.lat, d.lon];
-    const icon = markerIcon(d.online, d.fix_valid);
-    const html = popupHtml(d);
-    if (deviceMarkers[d.device_id]) {
-      deviceMarkers[d.device_id].setLatLng(ll).setIcon(icon);
-      if (deviceMarkers[d.device_id].isPopupOpen())
-        deviceMarkers[d.device_id].getPopup().setContent(html);
-    } else {
-      const m = L.marker(ll,{icon}).addTo(map)
-        .bindPopup(html,{maxWidth:220,minWidth:200});
-      m.on('click',()=>selectDevice(d.device_id));
-      deviceMarkers[d.device_id] = m;
-    }
-  }
-  for (const id of Object.keys(deviceMarkers)) {
-    if (!seen.has(id)){map.removeLayer(deviceMarkers[id]);delete deviceMarkers[id];}
-  }
-
-  // If selected device is live, update its info panel
-  if (selectedId) {
-    const d = fleetData.find(x=>x.device_id===selectedId);
-    if (d) renderInfoPanel(d);
-  }
-
-  document.getElementById('f-time').textContent = nowIST();
-  document.getElementById('f-txt').textContent = `${devices.length} device${devices.length!==1?'s':''} · ${live} live`;
+  updateStats();
+  renderLegend();
+  document.getElementById('ftr-t').textContent=nowIST();
+  document.getElementById('ftr-s').textContent=`${devices.length} device${devices.length!==1?'s':''}`;
 }
 
-// ── Device selection ──────────────────────────────────────────────
-async function selectDevice(id) {
-  selectedId = id;
-
-  // Highlight card
-  document.querySelectorAll('.dcard').forEach(c=>c.classList.toggle('active',c.dataset&&c.dataset.id===id));
-
-  // Fly to device
-  const d = fleetData.find(x=>x.device_id===id);
-  if (d&&d.lat&&d.lon) {
-    map.setView([d.lat,d.lon],17,{animate:true});
-    if (deviceMarkers[id]) deviceMarkers[id].openPopup();
-  }
-
-  document.getElementById('sel-dev-label').textContent = id;
-  renderInfoPanel(d||{device_id:id});
-  await loadSessions(id);
+function toggleCheck(did){
+  setSelected(did, !selected.has(did));
 }
 
-function renderInfoPanel(d) {
-  const lastT = d.last_seen_display ? d.last_seen_display.split(' ').slice(1).join(' ')+' IST' : '—';
-  const fixC  = d.fix_valid?'ok':'warn';
-  const onC   = d.online==='live'?'ok':d.online==='stale'?'warn':'bad';
-  document.getElementById('info-panel').innerHTML = `
-    <div class="info-row"><span class="info-lbl">Status</span><span class="info-val ${onC}">${(d.online||'unknown').toUpperCase()}</span></div>
-    <div class="info-row"><span class="info-lbl">GNSS Fix</span><span class="info-val ${fixC}">${d.fix_valid?'✓ Valid':'✗ Lost'}</span></div>
-    <div class="info-row"><span class="info-lbl">Satellites</span><span class="info-val">${d.sats??'—'}</span></div>
-    <div class="info-row"><span class="info-lbl">HDOP</span><span class="info-val">${d.hdop!=null?Number(d.hdop).toFixed(1):'—'}</span></div>
-    <div class="info-row"><span class="info-lbl">Speed</span><span class="info-val">${d.speed_mps!=null?(Number(d.speed_mps)*3.6).toFixed(1)+' km/h':'—'}</span></div>
-    <div class="info-row"><span class="info-lbl">WiFi</span><span class="info-val">${d.wifi_rssi_dbm!=null?d.wifi_rssi_dbm+' dBm':'—'}</span></div>
-    <div class="info-row"><span class="info-lbl">ESKF</span><span class="info-val ${d.eskf_init?'ok':'warn'}">${d.eskf_init?'Initialized':'Waiting'}</span></div>
-    <div class="info-row"><span class="info-lbl">Last seen</span><span class="info-val">${lastT}</span></div>
-    <div class="info-row"><span class="info-lbl">Age</span><span class="info-val">${ageStr(d.age_s)}</span></div>
-    <div class="info-row"><span class="info-lbl">Firmware</span><span class="info-val">${d.fw_version||'—'}</span></div>
-  `;
+// ── Legend ─────────────────────────────────────────────────
+function renderLegend(){
+  const lg=document.getElementById('legend');
+  const active=[...selected].filter(did=>fleetData.find(d=>d.device_id===did));
+  if(!active.length){ lg.style.display='none'; return; }
+  lg.style.display='block';
+  lg.innerHTML=active.map(did=>{
+    const col=getColor(did);
+    const shortId=did.split(':').slice(-3).join(':');
+    return `<div class="leg-row">
+      <div class="leg-line" style="background:${col}"></div>
+      <span style="font-family:var(--mono);color:${col};font-size:8.5px">${shortId}</span>
+    </div>`;
+  }).join('');
 }
 
-// ── Sessions ──────────────────────────────────────────────────────
-async function loadSessions(device_id) {
-  const sel = document.getElementById('session-sel');
-  sel.disabled = true;
-  sel.innerHTML = '<option value="">Loading…</option>';
-  gnssPolyline.setLatLngs([]);
-  eskfPolyline.setLatLngs([]);
-
-  try {
-    const res  = await api(`/api/sessions/${encodeURIComponent(device_id)}`);
-    const list = await res.json();
-    if (!Array.isArray(list)||!list.length) {
-      sel.innerHTML = '<option value="">No sessions found</option>';
-      return;
-    }
-    sel.innerHTML = `<option value="LIVE">▶ LIVE — latest position</option>` +
-      list.map(s=>`<option value="${s.session_id||''}">${s.label||s.session_id||'Session'}</option>`).join('');
-    sel.disabled = false;
-    sel.onchange = () => loadTrack(device_id, sel.value);
-    // Auto-load live
-    sel.value = 'LIVE';
-    await loadTrack(device_id, 'LIVE');
-  } catch(e) {
-    sel.innerHTML = '<option value="">Error loading sessions</option>';
-  }
+// ── Popup ───────────────────────────────────────────────────
+function popHtml(d,col){
+  const gw=d.online==='live'?`box-shadow:0 0 6px ${col};`:'';
+  const lastT=d.last_seen_display
+    ?(d.last_seen_display.split(' ').slice(1).join(' ')+' IST'):'—';
+  return `<div class="pop">
+    <div class="pop-top">
+      <div class="pop-dot" style="background:${col};${gw}"></div>
+      <div class="pop-id">${d.device_id}</div>
+    </div>
+    <div class="pr"><span class="pl">Status</span><span class="pv">${d.online.toUpperCase()}</span></div>
+    <div class="pr"><span class="pl">GNSS</span><span class="pv" style="color:${d.fix_valid?'#00e887':'#ffb800'}">${d.fix_valid?'✓ Fix':'✗ Lost'} · ${d.sats??'—'} sat</span></div>
+    <div class="pr"><span class="pl">HDOP</span><span class="pv">${d.hdop!=null?Number(d.hdop).toFixed(1):'—'}</span></div>
+    <div class="pr"><span class="pl">Speed</span><span class="pv">${d.speed_mps!=null?(Number(d.speed_mps)*3.6).toFixed(1)+' km/h':'—'}</span></div>
+    <div class="pr"><span class="pl">Last seen</span><span class="pv">${lastT}</span></div>
+    <div class="pr"><span class="pl">Firmware</span><span class="pv">${d.fw_version||'—'}</span></div>
+  </div>`;
 }
 
-// ── Track loading ─────────────────────────────────────────────────
-async function loadTrack(device_id, session_key) {
-  clearInterval(liveInterval);
-  gnssPolyline.setLatLngs([]);
-  eskfPolyline.setLatLngs([]);
-
-  if (session_key === 'LIVE') {
-    await fetchLiveTrack(device_id);
-    liveInterval = setInterval(()=>fetchLiveTrack(device_id), 5000);
-  } else {
-    await fetchHistoricalTrack(device_id, session_key);
-  }
-}
-
-async function fetchLiveTrack(device_id) {
-  // For live, fetch last 5 minutes of track
-  const end   = new Date();
-  const start = new Date(end.getTime() - 5*60*1000);
-  const q = `?start=${start.toISOString()}&end=${end.toISOString()}`;
-  try {
-    const [rg, re] = await Promise.all([
-      api(`/api/gnss/track/${encodeURIComponent(device_id)}${q}`),
-      api(`/api/eskf/track/${encodeURIComponent(device_id)}${q}`)
-    ]);
-    const gd = await rg.json();
-    const ed = await re.json();
-    applyTrack(gd, ed, true);
-  } catch(e){}
-}
-
-async function fetchHistoricalTrack(device_id, session_id) {
-  const q = session_id ? `?session_id=${encodeURIComponent(session_id)}` : '';
-  try {
-    const [rg, re] = await Promise.all([
-      api(`/api/gnss/track/${encodeURIComponent(device_id)}${q}`),
-      api(`/api/eskf/track/${encodeURIComponent(device_id)}${q}`)
-    ]);
-    const gd = await rg.json();
-    const ed = await re.json();
-    applyTrack(gd, ed, false);
-  } catch(e){}
-}
-
-function applyTrack(gnssData, eskfData, fitBounds) {
-  const gPath = Array.isArray(gnssData)
-    ? gnssData.filter(p=>p.lat&&p.lon&&Math.abs(p.lat)>0.01).map(p=>([p.lat,p.lon])) : [];
-  const ePath = Array.isArray(eskfData)
-    ? eskfData.filter(p=>p.lat&&p.lon&&Math.abs(p.lat)>0.01).map(p=>([p.lat,p.lon])) : [];
-
-  if (showGnss) gnssPolyline.setLatLngs(gPath);
-  if (showEskf) eskfPolyline.setLatLngs(ePath);
-
-  if (fitBounds) {
-    const all = [...gPath, ...ePath];
-    if (all.length > 1) {
-      map.fitBounds(L.latLngBounds(all), {padding:[40,40]});
-    } else if (all.length === 1) {
-      map.setView(all[0], 17);
-    }
-  }
-}
-
-function toggleTrack(type) {
-  if (type==='gnss') {
-    showGnss = !showGnss;
-    document.getElementById('btn-gnss').classList.toggle('active-gnss', showGnss);
-    if (!showGnss) gnssPolyline.setLatLngs([]);
-    else { const sel=document.getElementById('session-sel'); if(selectedId) loadTrack(selectedId, sel.value); }
-  } else {
-    showEskf = !showEskf;
-    document.getElementById('btn-eskf').classList.toggle('active-eskf', showEskf);
-    if (!showEskf) eskfPolyline.setLatLngs([]);
-    else { const sel=document.getElementById('session-sel'); if(selectedId) loadTrack(selectedId, sel.value); }
-  }
-}
-
-// ── Init ──────────────────────────────────────────────────────────
-async function init() {
-  if (!token) { window.location.href='/login'; return; }
-  document.getElementById('loading').style.display = 'none';
-  document.getElementById('app').style.display = 'flex';
-  // Set initial track btn states
-  document.getElementById('btn-gnss').classList.add('active-gnss');
-  document.getElementById('btn-eskf').classList.add('active-eskf');
-  await doFleetRefresh();
+// ── Init ────────────────────────────────────────────────────
+async function init(){
+  if(!token){ window.location.href='/login'; return; }
+  document.getElementById('loading').style.display='none';
+  document.getElementById('app').style.display='flex';
+  await doFleet();
+  // Auto-select all live devices on load
+  selectLive();
 }
 
 init();
