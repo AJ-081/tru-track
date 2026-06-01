@@ -1,0 +1,98 @@
+#ifndef ESKF3D_H
+#define ESKF3D_H
+
+#include <stdint.h>
+
+static constexpr int ESKF_NX = 15;
+
+// ======================================================
+// 3D Error-State Kalman Filter (Vehicle Navigation)
+// Internal frame: ENU
+// External interface: LLA in / LLA out
+// ======================================================
+
+class Eskf3D {
+public:
+  // ---------- Constructor ----------
+  Eskf3D();
+
+  // ---------- Initialization ----------
+  // Set ENU origin using GNSS reference
+  void initLLA(float lat_deg, float lon_deg, float alt_m);
+
+  // Optional initial yaw (rad, ENU frame)
+  void setInitialYaw(float yaw_rad);
+
+  // ---------- Prediction (IMU) ----------
+  // ax, ay, az : m/s^2 (specific force, body frame)
+  // gx, gy, gz : rad/s   (body frame)
+  // t_us       : timestamp in microseconds
+  void predict(uint64_t t_us, float ax, float ay, float az, float gx, float gy,
+               float gz);
+
+  // ---------- GNSS Update ----------
+  // Position update using LLA
+  void updateGnssLLA(uint64_t t_us, float lat_deg, float lon_deg, float alt_m);
+
+  // Optional GNSS velocity update (ENU)
+  void updateGnssVel(float vE, float vN, float vU);
+
+  // ---------- Non-Holonomic Update ----------
+  // Force lateral/vertical body velocity to zero
+  // Call this after predict() usually
+  void updateNonHolonomic();
+
+  // ---------- Zero Velocity Update (ZUPT) ----------
+  // Force ALL velocity to zero (vehicle stopped)
+  void updateZeroVelocity();
+
+  // Helper to detect static condition
+  // Returns true if accel/gyro variance is low enough
+  bool isStatic(float ax, float ay, float az, float gx, float gy, float gz);
+
+  // ---------- Outputs ----------
+  // Position output (LLA)
+  void getLLA(float &lat_deg, float &lon_deg, float &alt_m) const;
+
+  // Velocity output (ENU, m/s)
+  void getVelocity(float &vE, float &vN, float &vU) const;
+
+  // Attitude output (rad)
+  void getEuler(float &roll, float &pitch, float &yaw) const;
+  void getLastPosInnovation(float &dE, float &dN, float &dU) const;
+  void getLastVelInnovation(float &dVE, float &dVN, float &dVU) const;
+  void getCovDiag(float diag[15]) const;
+
+private:
+  // ---------- Covariance ----------
+  // 15x15 covariance, row-major
+  float P[ESKF_NX * ESKF_NX];
+
+  // ---------- Nominal State ----------
+  // Position (ENU, meters)
+  float pE, pN, pU;
+
+  // Velocity (ENU, m/s)
+  float vE, vN, vU;
+
+  // Attitude quaternion (body -> nav)
+  float qw, qx, qy, qz;
+
+  // IMU biases
+  float bax, bay, baz;
+  float bgx, bgy, bgz;
+
+  // ---------- Time ----------
+  uint64_t last_t_us;
+  bool initialized;
+
+  // ---------- Reference LLA ----------
+  float lat0_deg;
+  float lon0_deg;
+  float alt0_m;
+  // -------- Debug / monitoring --------
+  float last_pos_innov[3]; // ENU (m)
+  float last_vel_innov[3]; // ENU (m/s)
+};
+
+#endif // ESKF3D_H
