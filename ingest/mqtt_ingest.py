@@ -1,330 +1,249 @@
 #!/usr/bin/env python3
-"""
-TRU-TRACK Async MQTT Ingest Service — v2.1
-Changes from v2.0:
-  - t_epoch_ms stored in all collections (device-side IST epoch from NTP)
-  - gnss_raw written on EVERY packet (fix_valid flag inside — no more gaps)
-  - eskf_state written on EVERY packet (init_valid, alignment_valid flags)
-  - imu_raw has calibrated flag
-  - ntp_synced flag stored in sessions + device_latest
-"""
-import asyncio
 import json
 import logging
 import os
+import signal
+import sys
+import time
 from datetime import datetime
 
-import aiomqtt
-import motor.motor_asyncio
-from dotenv import load_dotenv
+import paho.mqtt.client as mqtt
+from pymongo import MongoClient, ASCENDING, DESCENDING
+from pymongo.errors import DuplicateKeyError, PyMongoError
 
-load_dotenv("/etc/tru-track/secrets.env")
+MQTT_HOST = os.getenv("MQTT_HOST", "127.0.0.1")
+MQTT_PORT = int(os.getenv("MQTT_PORT", "1883"))
+MQTT_USER = os.getenv("MQTT_USER", "")
+MQTT_PASS = os.getenv("MQTT_PASS", "")
 
-# ── Config ────────────────────────────────────────────────────────────────────
-MQTT_HOST   = os.getenv("MQTT_HOST", "127.0.0.1")
-MQTT_PORT   = int(os.getenv("MQTT_PORT", 1883))
-MQTT_USER   = os.getenv("MQTT_USER", "")
-MQTT_PASS   = os.getenv("MQTT_PASS", "")
-MONGO_URI   = os.getenv("MONGO_URI", "mongodb://127.0.0.1:27017/?directConnection=true")
-MONGO_DB    = os.getenv("MONGO_DB", "nav")
+MONGO_URI = os.getenv("MONGO_URI", "mongodb://localhost:27017")
+MONGO_DB = os.getenv("MONGO_DB", "nav")
 
-BATCH_SIZE  = 50
-FLUSH_MS    = 200
+TOPICS = [
+    ("nav/+/eskf", 0),
+    ("nav/eskf/debug", 0),
+]
 
-# ── Logging ───────────────────────────────────────────────────────────────────
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s %(levelname)s %(message)s",
-    handlers=[
-        logging.FileHandler("/var/log/tru-track/ingest.log"),
-        logging.StreamHandler(),
-    ],
+    handlers=[logging.StreamHandler(sys.stdout)],
 )
-log = logging.getLogger("ingest")
+log = logging.getLogger("tru-track-ingest")
 
-# ── MongoDB ───────────────────────────────────────────────────────────────────
-mongo  = motor.motor_asyncio.AsyncIOMotorClient(MONGO_URI)
-db     = mongo[MONGO_DB]
+mongo = MongoClient(MONGO_URI)
+db = mongo[MONGO_DB]
 
-gnss_col  = db.gnss_raw
-eskf_col  = db.eskf_state
-imu_col    = db.imu_raw
-imu_hf_col = db.imu_hf
-sess_col  = db.sessions
-dlat_col  = db.device_latest
-dreg_col  = db.device_registry
+gnss_col = db.gnss_raw
+eskf_col = db.eskf_state
+imu_col = db.imu_raw
+latest_col = db.device_latest
+sessions_col = db.sessions
+registry_col = db.device_registry
 
-# ── Write buffers ─────────────────────────────────────────────────────────────
-gnss_buf:   list = []
-eskf_buf:   list = []
-imu_buf:    list = []
-imu_hf_buf: list = []
+packet_count = 0
+insert_count = 0
+duplicate_count = 0
+error_count = 0
 
 
-# ── Flush buffers to MongoDB ──────────────────────────────────────────────────
-async def flush_buffers(force: bool = False):
-    global gnss_buf, eskf_buf, imu_buf
-    tasks = []
-
-    if gnss_buf and (force or len(gnss_buf) >= BATCH_SIZE):
-        tasks.append(gnss_col.insert_many(gnss_buf.copy(), ordered=False))
-        gnss_buf.clear()
-
-    if eskf_buf and (force or len(eskf_buf) >= BATCH_SIZE):
-        tasks.append(eskf_col.insert_many(eskf_buf.copy(), ordered=False))
-        eskf_buf.clear()
-
-    if imu_buf and (force or len(imu_buf) >= BATCH_SIZE):
-        tasks.append(imu_col.insert_many(imu_buf.copy(), ordered=False))
-    if len(imu_hf_buf) >= 50:
-        tasks.append(imu_hf_col.insert_many(imu_hf_buf.copy(), ordered=False))
-        imu_hf_buf.clear()
-        imu_buf.clear()
-
-    if tasks:
-        try:
-            await asyncio.gather(*tasks)
-        except Exception as e:
-            log.error(f"Buffer flush error: {e}")
+def now_utc():
+    return datetime.utcnow()
 
 
-async def periodic_flush():
-    while True:
-        await asyncio.sleep(FLUSH_MS / 1000)
-        await flush_buffers(force=True)
+def clean_doc(doc):
+    # Never allow reused/carry-over Mongo _id into insert.
+    doc = dict(doc)
+    doc.pop("_id", None)
+    return doc
 
 
-# ── Process one MQTT message ──────────────────────────────────────────────────
-async def process_imu_hf(payload_bytes: bytes):
-    """Handle nav/{mac}/imu_hf — batch of 100 IMU samples at 100Hz."""
+def safe_insert(col, doc, label):
+    global insert_count, duplicate_count, error_count
     try:
-        data = json.loads(payload_bytes.decode("utf-8"))
-    except Exception as e:
-        log.warning(f"IMU HF JSON decode error: {e}")
-        return
+        col.insert_one(clean_doc(doc))
+        insert_count += 1
+    except DuplicateKeyError:
+        duplicate_count += 1
+        # Do not print the full document; that caused GB-scale logs.
+        if duplicate_count % 1000 == 1:
+            log.warning("DuplicateKey ignored in %s; total_duplicates=%s", label, duplicate_count)
+    except PyMongoError as exc:
+        error_count += 1
+        log.error("Mongo insert failed in %s: %s", label, exc.__class__.__name__)
 
-    device_id  = data.get("d")
-    session_id = data.get("s")
-    fw_version = data.get("v")
-    samples    = data.get("imu", [])
 
-    if not device_id or not samples:
-        return
-
-    t_server = datetime.utcnow()
-    docs = []
-    for s in samples:
-        if not isinstance(s, list) or len(s) < 7:
-            continue
-        docs.append({
-            "device_id":   device_id,
-            "session_id":  session_id,
-            "fw_version":  fw_version,
-            "t_ms":        int(s[0]),
-            "t_server":    t_server,
-            "accel_mps2":  [float(s[1]), float(s[2]), float(s[3])],
-            "gyro_radps":  [float(s[4]), float(s[5]), float(s[6])],
-        })
-
-    if docs:
-        imu_hf_buf.extend(docs)
-        log.info(f"IMU HF: {device_id} | {len(docs)} samples buffered")
-
-async def process_message(payload_bytes: bytes):
-    try:
-        data = json.loads(payload_bytes.decode("utf-8"))
-    except Exception as e:
-        log.warning(f"JSON decode error: {e}")
-        return
-
-    device_id  = data.get("device_id")
-    session_id = data.get("session_id")
-
-    if not device_id:
-        log.warning("Dropped: missing device_id")
-        return
-
-    t_server   = datetime.utcnow()
-    t_epoch_ms = data.get("t_epoch_ms", 0)   # ← device-side IST epoch ms (0 before NTP sync)
-    ntp_synced = data.get("ntp_synced", False)
-
-    # Common fields — present in every collection document
-    common = {
-        "device_id":   device_id,
-        "session_id":  session_id,
-        "boot_id":     data.get("boot_id"),
-        "boot_count":  data.get("boot_count"),
-        "fw_version":  data.get("fw_version"),
-        "t_ms":        data.get("t_ms"),
-        "t_server":    t_server,
-        "t_epoch_ms":  t_epoch_ms,    # ← IST epoch ms from device NTP
-        "ntp_synced":  ntp_synced,
+def build_common(payload, t_server):
+    return {
+        "device_id": payload.get("device_id"),
+        "session_id": payload.get("session_id"),
+        "boot_id": payload.get("boot_id"),
+        "boot_count": payload.get("boot_count"),
+        "fw_version": payload.get("fw_version"),
+        "t_ms": payload.get("t_ms"),
+        "t_epoch_ms": payload.get("t_epoch_ms"),
+        "ntp_synced": payload.get("ntp_synced"),
+        "calibrated": payload.get("calibrated"),
+        "t_server": t_server,
+        "status": payload.get("status", {}),
     }
 
-    status = data.get("status", {})
-    gnss   = data.get("gnss", {})
-    eskf   = data.get("eskf", {})
-    imu    = data.get("imu", {})
 
-    # ── gnss_raw — written on EVERY packet ───────────────────────────────────
-    # fix_valid=False rows mark gaps where GNSS signal was lost
-    # Export can filter on fix_valid=True for position data only
-    if gnss:
-        gnss_buf.append({
+def handle_payload(payload):
+    global packet_count
+
+    device_id = payload.get("device_id")
+    if not device_id:
+        return
+
+    packet_count += 1
+    t_server = now_utc()
+    common = build_common(payload, t_server)
+
+    gnss = payload.get("gnss") or {}
+    if isinstance(gnss, dict) and gnss:
+        safe_insert(gnss_col, {
             **common,
-            "fix_valid":  gnss.get("fix_valid", False),
-            "lat":        gnss.get("lat"),
-            "lon":        gnss.get("lon"),
-            "alt":        gnss.get("alt"),
-            "speed":      gnss.get("speed"),
-            "course":     gnss.get("course"),
-            "sats":       gnss.get("sats"),
-            "hdop":       gnss.get("hdop"),
-            "fix_type":   gnss.get("fix_type"),
-            "age_ms":     gnss.get("age_ms"),
-        })
+            "lat": gnss.get("lat"),
+            "lon": gnss.get("lon"),
+            "alt": gnss.get("alt"),
+            "speed": gnss.get("speed"),
+            "course": gnss.get("course"),
+            "sats": gnss.get("sats"),
+            "hdop": gnss.get("hdop"),
+            "fix_type": gnss.get("fix_type"),
+            "age_ms": gnss.get("age_ms"),
+        }, "gnss_raw")
 
-    # ── eskf_state — written on EVERY packet ─────────────────────────────────
-    # init_valid=False rows exist before ESKF initialization
-    # alignment_valid=False rows exist during alignment phase
-    if eskf:
-        eskf_buf.append({
+    eskf = payload.get("eskf") or {}
+    if isinstance(eskf, dict) and eskf:
+        safe_insert(eskf_col, {
             **common,
-            "init_valid":      eskf.get("init_valid", False),
-            "alignment_valid": eskf.get("alignment_valid", False),
-            "lat":             eskf.get("lat"),
-            "lon":             eskf.get("lon"),
-            "alt":             eskf.get("alt"),
-            "vE":              eskf.get("vE"),
-            "vN":              eskf.get("vN"),
-            "vU":              eskf.get("vU"),
-            "roll":            eskf.get("roll"),
-            "pitch":           eskf.get("pitch"),
-            "yaw":             eskf.get("yaw"),
-            "innov":           eskf.get("innov"),
-            "P":               eskf.get("P"),
-        })
+            "lat": eskf.get("lat"),
+            "lon": eskf.get("lon"),
+            "alt": eskf.get("alt"),
+            "vE": eskf.get("vE"),
+            "vN": eskf.get("vN"),
+            "vU": eskf.get("vU"),
+            "roll": eskf.get("roll"),
+            "pitch": eskf.get("pitch"),
+            "yaw": eskf.get("yaw"),
+            "innov": eskf.get("innov"),
+            "P": eskf.get("P"),
+        }, "eskf_state")
 
-    # ── imu_raw — always present ──────────────────────────────────────────────
-    if imu:
-        imu_buf.append({
+    imu = payload.get("imu") or {}
+    imu_samples = []
+
+    if isinstance(imu, dict) and imu:
+        imu_samples.append(imu)
+    elif isinstance(imu, list):
+        imu_samples.extend(imu)
+
+    for sample in imu_samples[:500]:
+        if not isinstance(sample, dict):
+            continue
+        safe_insert(imu_col, {
             **common,
-            "calibrated":      imu.get("calibrated", False),
-            "accel_raw":       imu.get("accel_raw"),
-            "gyro_raw":        imu.get("gyro_raw"),
-            "accel_mps2":      imu.get("accel_mps2"),
-            "gyro_radps":      imu.get("gyro_radps"),
-            "gyro_bias_radps": imu.get("gyro_bias_radps"),
-        })
+            "t_ms": sample.get("t_ms", common.get("t_ms")),
+            "accel_raw": sample.get("accel_raw"),
+            "gyro_raw": sample.get("gyro_raw"),
+            "accel_mps2": sample.get("accel_mps2"),
+            "gyro_radps": sample.get("gyro_radps"),
+            "gyro_bias_radps": sample.get("gyro_bias_radps"),
+        }, "imu_raw")
 
-    # ── sessions upsert ───────────────────────────────────────────────────────
+    # Lightweight latest/session metadata.
     try:
-        await sess_col.update_one(
-            {"session_id": session_id},
-            {
-                "$setOnInsert": {
-                    "device_id":           device_id,
-                    "session_id":          session_id,
-                    "started_at_server":   t_server,
-                    "started_t_epoch_ms":  t_epoch_ms,
-                    "boot_id":             data.get("boot_id"),
-                    "boot_count":          data.get("boot_count"),
-                    "reboot_reason":       data.get("reboot_reason"),
-                    "fw_version":          data.get("fw_version"),
-                },
-                "$set": {
-                    "last_seen":          t_server,
-                    "last_t_epoch_ms":    t_epoch_ms,
-                    "ntp_synced":         ntp_synced,
-                },
-                "$inc": {"packet_count": 1},
-            },
-            upsert=True,
-        )
-    except Exception as e:
-        log.error(f"sessions upsert error: {e}")
-
-    # ── device_latest upsert ──────────────────────────────────────────────────
-    try:
-        await dlat_col.update_one(
+        latest_col.update_one(
             {"device_id": device_id},
             {"$set": {
-                **data,
-                "t_server":     t_server,
-                "t_epoch_ms":   t_epoch_ms,
-                "last_seen":    t_server,
-                "ntp_synced":   ntp_synced,
+                "device_id": device_id,
+                "session_id": payload.get("session_id"),
+                "last_seen": t_server,
+                "fw_version": payload.get("fw_version"),
+                "status": payload.get("status", {}),
+                "gnss": gnss if isinstance(gnss, dict) else {},
+                "eskf": eskf if isinstance(eskf, dict) else {},
             }},
             upsert=True,
         )
-    except Exception as e:
-        log.error(f"device_latest upsert error: {e}")
 
-    # ── device_registry upsert ────────────────────────────────────────────────
-    try:
-        await dreg_col.update_one(
+        registry_col.update_one(
             {"device_id": device_id},
             {
-                "$setOnInsert": {
-                    "device_id":          device_id,
-                    "first_seen":         t_server,
-                    "first_t_epoch_ms":   t_epoch_ms,
-                },
-                "$set": {
-                    "last_seen":          t_server,
-                    "last_t_epoch_ms":    t_epoch_ms,
-                    "fw_version":         data.get("fw_version"),
-                    "ntp_synced":         ntp_synced,
-                },
+                "$setOnInsert": {"first_seen": t_server},
+                "$set": {"last_seen": t_server, "fw_version": payload.get("fw_version")},
                 "$inc": {"total_packets": 1},
             },
             upsert=True,
         )
-    except Exception as e:
-        log.error(f"device_registry upsert error: {e}")
 
-    await flush_buffers()
+        sid = payload.get("session_id")
+        if sid:
+            sessions_col.update_one(
+                {"session_id": sid},
+                {
+                    "$setOnInsert": {
+                        "session_id": sid,
+                        "device_id": device_id,
+                        "started_at_server": t_server,
+                    },
+                    "$set": {"last_packet_at": t_server, "open": True},
+                    "$inc": {"packet_count": 1},
+                },
+                upsert=True,
+            )
+    except PyMongoError as exc:
+        log.error("Mongo metadata update failed: %s", exc.__class__.__name__)
 
-    log.info(
-        f"{device_id} | gnss={'FIX' if gnss.get('fix_valid') else 'NO_FIX'}"
-        f" | eskf={'READY' if eskf.get('alignment_valid') else ('INIT' if eskf.get('init_valid') else 'WAIT')}"
-        f" | ntp={'OK' if ntp_synced else '--'}"
-        f" | t_epoch_ms={t_epoch_ms}"
-    )
-
-
-# ── Main MQTT loop ────────────────────────────────────────────────────────────
-async def main():
-    log.info("TRU-TRACK Ingest v2.1 starting...")
-
-    asyncio.create_task(periodic_flush())
-
-    mqtt_kwargs = {
-        "hostname": MQTT_HOST,
-        "port":     MQTT_PORT,
-    }
-    if MQTT_USER:
-        mqtt_kwargs["username"] = MQTT_USER
-        mqtt_kwargs["password"] = MQTT_PASS
-
-    while True:
-        try:
-            async with aiomqtt.Client(**mqtt_kwargs) as client:
-                log.info(f"MQTT connected → {MQTT_HOST}:{MQTT_PORT}")
-                await client.subscribe("nav/+/eskf")
-                await client.subscribe("nav/eskf/debug")   # legacy topic
-                log.info("Subscribed: nav/+/eskf  +  nav/eskf/debug (legacy)")
-
-                async for message in client.messages:
-                    await process_message(message.payload)
-
-        except aiomqtt.MqttError as e:
-            log.warning(f"MQTT error: {e} — reconnecting in 5s")
-            await asyncio.sleep(5)
-        except Exception as e:
-            log.error(f"Unexpected error: {e} — reconnecting in 5s")
-            await asyncio.sleep(5)
+    if packet_count % 100 == 1:
+        log.info(
+            "packets=%s inserts=%s duplicates=%s errors=%s last_device=%s",
+            packet_count, insert_count, duplicate_count, error_count, device_id
+        )
 
 
-if __name__ == "__main__":
-    asyncio.run(main())
+def on_connect(client, userdata, flags, rc, properties=None):
+    log.info("MQTT connected → %s:%s rc=%s", MQTT_HOST, MQTT_PORT, rc)
+    for topic in TOPICS:
+        client.subscribe(topic)
+    log.info("Subscribed: nav/+/eskf + nav/eskf/debug")
+
+
+def on_message(client, userdata, msg):
+    try:
+        payload = json.loads(msg.payload.decode("utf-8", errors="replace"))
+        handle_payload(payload)
+    except Exception as exc:
+        log.error("Message dropped: %s", exc.__class__.__name__)
+
+
+def shutdown(signum, frame):
+    log.info("Shutting down ingest")
+    sys.exit(0)
+
+
+signal.signal(signal.SIGTERM, shutdown)
+signal.signal(signal.SIGINT, shutdown)
+
+log.info("TRU-TRACK Ingest SAFE starting...")
+
+try:
+    client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2, client_id="tru-track-ingest-safe")
+except Exception:
+    client = mqtt.Client(client_id="tru-track-ingest-safe")
+
+if MQTT_USER:
+    client.username_pw_set(MQTT_USER, MQTT_PASS)
+
+client.on_connect = on_connect
+client.on_message = on_message
+
+while True:
+    try:
+        client.connect(MQTT_HOST, MQTT_PORT, keepalive=60)
+        client.loop_forever()
+    except Exception as exc:
+        log.error("MQTT loop failed: %s; retrying in 5s", exc.__class__.__name__)
+        time.sleep(5)
