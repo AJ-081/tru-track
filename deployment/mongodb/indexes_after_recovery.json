@@ -1,0 +1,128 @@
+{
+  gnss_raw: [
+    {
+      v: 2,
+      key: {
+        _id: 1
+      },
+      name: '_id_'
+    },
+    {
+      v: 2,
+      key: {
+        device_id: 1,
+        session_id: 1,
+        t_server: 1
+      },
+      name: 'dev_sess_ts'
+    },
+    {
+      v: 2,
+      key: {
+        session_id: 1,
+        t_server: 1
+      },
+      name: 'sess_ts'
+    },
+    {
+      v: 2,
+      key: {
+        device_id: 1,
+        t_server: -1
+      },
+      name: 'dev_ts_desc'
+    },
+    {
+      v: 2,
+      key: {
+        t_server: 1
+      },
+      name: 'ttl_90d',
+      expireAfterSeconds: 7776000
+    }
+  ],
+  eskf_state: [
+    {
+      v: 2,
+      key: {
+        _id: 1
+      },
+      name: '_id_'
+    },
+    {
+      v: 2,
+      key: {
+        device_id: 1,
+        session_id: 1,
+        t_server: 1
+      },
+      name: 'dev_sess_ts'
+    },
+    {
+      v: 2,
+      key: {
+        session_id: 1,
+        t_server: 1
+      },
+      name: 'sess_ts'
+    },
+    {
+      v: 2,
+      key: {
+        device_id: 1,
+        t_server: -1
+      },
+      name: 'dev_ts_desc'
+    },
+    {
+      v: 2,
+      key: {
+        t_server: 1
+      },
+      name: 'ttl_90d',
+      expireAfterSeconds: 7776000
+    }
+  ],
+  imu_raw: [
+    {
+      v: 2,
+      key: {
+        _id: 1
+      },
+      name: '_id_'
+    },
+    {
+      v: 2,
+      key: {
+        device_id: 1,
+        session_id: 1,
+        t_server: 1
+      },
+      name: 'dev_sess_ts'
+    },
+    {
+      v: 2,
+      key: {
+        session_id: 1,
+        t_server: 1
+      },
+      name: 'sess_ts'
+    },
+    {
+      v: 2,
+      key: {
+        device_id: 1,
+        t_server: -1
+      },
+      name: 'dev_ts_desc'
+    },
+    {
+      v: 2,
+      key: {
+        t_server: 1
+      },
+      name: 'ttl_90d',
+      expireAfterSeconds: 7776000
+    }
+  ]
+}
