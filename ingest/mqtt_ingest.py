@@ -48,15 +48,17 @@ db     = mongo[MONGO_DB]
 
 gnss_col  = db.gnss_raw
 eskf_col  = db.eskf_state
-imu_col   = db.imu_raw
+imu_col    = db.imu_raw
+imu_hf_col = db.imu_hf
 sess_col  = db.sessions
 dlat_col  = db.device_latest
 dreg_col  = db.device_registry
 
 # ── Write buffers ─────────────────────────────────────────────────────────────
-gnss_buf: list = []
-eskf_buf: list = []
-imu_buf:  list = []
+gnss_buf:   list = []
+eskf_buf:   list = []
+imu_buf:    list = []
+imu_hf_buf: list = []
 
 
 # ── Flush buffers to MongoDB ──────────────────────────────────────────────────
@@ -74,6 +76,9 @@ async def flush_buffers(force: bool = False):
 
     if imu_buf and (force or len(imu_buf) >= BATCH_SIZE):
         tasks.append(imu_col.insert_many(imu_buf.copy(), ordered=False))
+    if len(imu_hf_buf) >= 50:
+        tasks.append(imu_hf_col.insert_many(imu_hf_buf.copy(), ordered=False))
+        imu_hf_buf.clear()
         imu_buf.clear()
 
     if tasks:
@@ -90,6 +95,41 @@ async def periodic_flush():
 
 
 # ── Process one MQTT message ──────────────────────────────────────────────────
+async def process_imu_hf(payload_bytes: bytes):
+    """Handle nav/{mac}/imu_hf — batch of 100 IMU samples at 100Hz."""
+    try:
+        data = json.loads(payload_bytes.decode("utf-8"))
+    except Exception as e:
+        log.warning(f"IMU HF JSON decode error: {e}")
+        return
+
+    device_id  = data.get("d")
+    session_id = data.get("s")
+    fw_version = data.get("v")
+    samples    = data.get("imu", [])
+
+    if not device_id or not samples:
+        return
+
+    t_server = datetime.utcnow()
+    docs = []
+    for s in samples:
+        if not isinstance(s, list) or len(s) < 7:
+            continue
+        docs.append({
+            "device_id":   device_id,
+            "session_id":  session_id,
+            "fw_version":  fw_version,
+            "t_ms":        int(s[0]),
+            "t_server":    t_server,
+            "accel_mps2":  [float(s[1]), float(s[2]), float(s[3])],
+            "gyro_radps":  [float(s[4]), float(s[5]), float(s[6])],
+        })
+
+    if docs:
+        imu_hf_buf.extend(docs)
+        log.info(f"IMU HF: {device_id} | {len(docs)} samples buffered")
+
 async def process_message(payload_bytes: bytes):
     try:
         data = json.loads(payload_bytes.decode("utf-8"))
