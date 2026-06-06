@@ -1,13 +1,15 @@
 #!/bin/bash
 set -e
 
+source /etc/tru-track/secrets.env
+
 DATE=$(date "+%Y%m%d-%H%M%S")
 BACKUP_DIR="/backup/tru-track"
 
 mkdir -p "$BACKUP_DIR/mongodb" "$BACKUP_DIR/code"
 
 mongodump \
-  --uri "mongodb://localhost:27017" \
+  --uri "$MONGO_URI" \
   --db nav \
   --out "$BACKUP_DIR/mongodb/nav_${DATE}" \
   --gzip
@@ -21,7 +23,7 @@ tar -czf "$BACKUP_DIR/code/code_${DATE}.tar.gz" \
   /etc/mosquitto/conf.d/tru-track.conf \
   2>/dev/null || true
 
-find "$BACKUP_DIR/mongodb/" -type d -mtime +7 -exec rm -rf {} + 2>/dev/null || true
+find "$BACKUP_DIR/mongodb/" -mindepth 1 -maxdepth 1 -type d -mtime +7 -exec rm -rf {} + 2>/dev/null || true
 find "$BACKUP_DIR/code/" -type f -mtime +7 -delete 2>/dev/null || true
 
 echo "[${DATE}] Backup complete" >> /var/log/tru-track/backup.log
