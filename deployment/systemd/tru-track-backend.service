@@ -1,0 +1,20 @@
+[Unit]
+Description=TRU-TRACK Flask Navigation Backend
+After=network.target mongod.service
+Requires=mongod.service
+
+[Service]
+Type=simple
+User=crl
+WorkingDirectory=/opt/tru-track/backend
+ExecStartPre=/bin/bash -c 'fuser -k 9000/tcp 2>/dev/null || true'
+ExecStart=/opt/tru-track/backend/venv/bin/python3 /opt/tru-track/backend/nav_backend.py
+Restart=on-failure
+RestartSec=10
+KillMode=control-group
+Environment=PYTHONUNBUFFERED=1
+StandardOutput=append:/var/log/tru-track/backend.log
+StandardError=append:/var/log/tru-track/backend.log
+
+[Install]
+WantedBy=multi-user.target

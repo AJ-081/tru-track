@@ -1,0 +1,19 @@
+[Unit]
+Description=TRU-TRACK MQTT Async Ingest Service
+After=network-online.target mongod.service mosquitto.service
+Wants=network-online.target
+Requires=mongod.service mosquitto.service
+
+[Service]
+Type=simple
+User=crl
+WorkingDirectory=/opt/tru-track/ingest
+ExecStart=/opt/tru-track/ingest/venv/bin/python mqtt_ingest.py
+Restart=always
+RestartSec=10
+KillMode=control-group
+TimeoutStopSec=15
+EnvironmentFile=/etc/tru-track/secrets.env
+
+[Install]
+WantedBy=multi-user.target
