@@ -672,8 +672,22 @@ def _verdict(mean_NIS):
     return 'too_tight'              # too little process noise / too much meas noise
 
 
+
+# Firmware export defaults — SAFE values for devices (NOT replay defaults)
+FIRMWARE_EXPORT_DEFAULTS = dict(
+    gating_thresh = 10.0,
+    max_dt        = 0.2,
+    min_dt        = 0.0005,
+)
+
 def generate_eskf_config_h(cfg):
     """Generate EskfConfig.h content from tuned parameters."""
+    # Never export replay-only values (gating disabled, large max_dt) to firmware
+    cfg = {**cfg}
+    if cfg.get("gating_thresh", 0) > 100:
+        cfg["gating_thresh"] = FIRMWARE_EXPORT_DEFAULTS["gating_thresh"]
+    if cfg.get("max_dt", 0) > 0.25:
+        cfg["max_dt"] = FIRMWARE_EXPORT_DEFAULTS["max_dt"]
     return f"""#ifndef ESKF_CONFIG_H
 #define ESKF_CONFIG_H
 #define ESKF_PI 3.14159265358979323846f

@@ -278,7 +278,7 @@ function tileProgress(loading, total){
 // ── Map ──────────────────────────────────────────────────
 const map = L.map('map',{zoomControl:true,attributionControl:false});
 L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', {
-    maxZoom: 20,
+    maxZoom: 22, maxNativeZoom: 19,
     keepBuffer: 4,
     updateWhenIdle: false,
     updateWhenZooming: false,
@@ -286,7 +286,7 @@ L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/
     attribution: 'Esri'
 }).addTo(map);
 L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_only_labels/{z}/{x}/{y}{r}.png', {
-    maxZoom: 20,
+    maxZoom: 22, maxNativeZoom: 19,
     opacity: 0.8,
     keepBuffer: 4,
     updateWhenIdle: false,

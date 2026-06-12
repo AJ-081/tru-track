@@ -270,8 +270,8 @@ let cNis=null,cCov=null,cInnov=null;
 // Map
 const map=L.map('map',{zoomControl:true,attributionControl:false});
 L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
-  {maxZoom:20,keepBuffer:4,updateWhenIdle:false}).addTo(map);
-L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_only_labels/{z}/{x}/{y}{r}.png',{maxZoom:20,opacity:0.7}).addTo(map);
+  {maxZoom:22, maxNativeZoom:19,keepBuffer:4,updateWhenIdle:false}).addTo(map);
+L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_only_labels/{z}/{x}/{y}{r}.png',{maxZoom:22, maxNativeZoom:19,opacity:0.7}).addTo(map);
 map.setView([21.17,72.83],14);
 setTimeout(()=>map.invalidateSize(true),100);
 
@@ -397,6 +397,7 @@ async function run(){
   try{
     const params=getParams();lastParams=params;
     const body={session_id:sid,params,gnss_deny_ranges:denyRanges};
+    if(csvGnss)body.csv_gnss=csvGnss;
     const res=await fetch(API+'/run',{method:'POST',
       headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
     const d=await res.json();

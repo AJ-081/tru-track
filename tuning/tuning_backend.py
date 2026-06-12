@@ -127,6 +127,7 @@ def run_tuning():
 
     params = {**DEFAULT_CFG, **(body.get("params") or {})}
     deny   = body.get("gnss_deny_ranges") or []
+    csv_gnss = body.get("csv_gnss")  # optional GNSS override from CSV
     ds     = max(1, int(body.get("downsample_imu", 1)))  # default 20Hz
 
     # ── Load IMU (read-only find) ─────────────────────────────────────────────
@@ -163,7 +164,7 @@ def run_tuning():
         {"session_id": session_id},
         {"_id":0, "t_ms":1, "lat":1, "lon":1, "alt":1,
          "speed":1, "course":1, "sats":1, "fix_type":1, "sats":1, "hdop":1}
-    ).sort("t_ms", 1).limit(2000)
+    ).sort("t_ms", 1).limit(20000)
 
     gnss_data = [
         {
@@ -192,6 +193,8 @@ def run_tuning():
         if d.get("lat") and d.get("lon") and d.get("lat") != 0
     ]
 
+    if csv_gnss:
+        gnss_data = csv_gnss  # CSV override (GNSS-denied simulation)
     if not gnss_data:
         return jsonify({"error": "No GNSS data for this session"}), 404
 
