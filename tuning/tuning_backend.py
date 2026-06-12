@@ -142,7 +142,7 @@ def run_tuning():
     for i, doc in enumerate(imu_cursor):
         if i % ds != 0:
             continue
-        if len(imu_data) >= 20000:
+        if len(imu_data) >= 60000:
             break
         a = doc.get("accel_mps2") or [0, 0, 0]
         g = doc.get("gyro_radps") or [0, 0, 0]
@@ -162,7 +162,7 @@ def run_tuning():
     gnss_cursor = db.gnss_raw.find(
         {"session_id": session_id},
         {"_id":0, "t_ms":1, "lat":1, "lon":1, "alt":1,
-         "speed":1, "course":1, "fix_valid":1, "sats":1, "hdop":1}
+         "speed":1, "course":1, "sats":1, "fix_type":1, "sats":1, "hdop":1}
     ).sort("t_ms", 1).limit(2000)
 
     gnss_data = [
@@ -173,7 +173,7 @@ def run_tuning():
             "alt":       doc.get("alt", 0),
             "speed":     doc.get("speed", 0),
             "course":    doc.get("course", 0),
-            "fix_valid": doc.get("fix_valid", False),
+            "fix_valid": (doc.get("sats") or 0) >= 5,
             "sats":      doc.get("sats", 0),
             "hdop":      doc.get("hdop", 99),
         }
