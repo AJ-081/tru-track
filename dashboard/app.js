@@ -39,13 +39,13 @@ function initLeafletMap() {
   // Satellite base layer (Esri World Imagery — free, no key)
   L.tileLayer(
     "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}",
-    { attribution: "Tiles © Esri", maxZoom: 19 }
+    { attribution: "Tiles © Esri", maxZoom: 22, maxNativeZoom: 19 }
   ).addTo(gmap);
 
   // Labels overlay
   L.tileLayer(
     "https://{s}.basemaps.cartocdn.com/light_only_labels/{z}/{x}/{y}{r}.png",
-    { attribution: "© CartoDB", maxZoom: 19, opacity: 0.7 }
+    { attribution: "© CartoDB", maxZoom: 22, maxNativeZoom: 19, opacity: 0.7 }
   ).addTo(gmap);
 
   gnssPolyline = L.polyline([], { color: "#ef4444", weight: 2.5, opacity: 0.9 }).addTo(gmap);

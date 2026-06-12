@@ -22,6 +22,7 @@ MONGO_DB = os.getenv("MONGO_DB", "nav")
 TOPICS = [
     ("nav/+/eskf", 0),
     ("nav/eskf/debug", 0),
+    ("nav/+/imu_hf", 0),
 ]
 
 logging.basicConfig(
@@ -37,6 +38,7 @@ db = mongo[MONGO_DB]
 gnss_col = db.gnss_raw
 eskf_col = db.eskf_state
 imu_col = db.imu_raw
+imu_hf_col = db.imu_hf
 latest_col = db.device_latest
 sessions_col = db.sessions
 registry_col = db.device_registry
@@ -88,6 +90,25 @@ def build_common(payload, t_server):
         "status": payload.get("status", {}),
     }
 
+
+def handle_imu_hf(payload):
+    device_id = payload.get("d")
+    session_id = payload.get("s")
+    fw = payload.get("v")
+    samples = payload.get("imu", [])
+    t_server = now_utc()
+    for s in samples[:200]:
+        if not isinstance(s, list) or len(s) < 7:
+            continue
+        try:
+            imu_hf_col.insert_one({
+                "device_id": device_id, "session_id": session_id,
+                "fw_version": fw, "t_ms": int(s[0]), "t_server": t_server,
+                "accel_mps2": [float(s[1]),float(s[2]),float(s[3])],
+                "gyro_radps": [float(s[4]),float(s[5]),float(s[6])],
+            })
+        except PyMongoError:
+            pass
 
 def handle_payload(payload):
     global packet_count
@@ -214,7 +235,10 @@ def on_connect(client, userdata, flags, rc, properties=None):
 def on_message(client, userdata, msg):
     try:
         payload = json.loads(msg.payload.decode("utf-8", errors="replace"))
-        handle_payload(payload)
+        if msg.topic.endswith("/imu_hf"):
+            handle_imu_hf(payload)
+        else:
+            handle_payload(payload)
     except Exception as exc:
         log.error("Message dropped: %s", exc.__class__.__name__)
 
