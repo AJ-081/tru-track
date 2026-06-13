@@ -509,6 +509,18 @@ def replay_session(imu_data, gnss_data, cfg, gnss_deny_ranges=None):
 
     eskf.init_lla(init_gnss['lat'], init_gnss['lon'], init_gnss.get('alt', 0))
 
+    # Attitude init: roll/pitch from gravity vector (first 10 IMU samples)
+    if len(imu_data) >= 5:
+        _ax=np.mean([d['ax'] for d in imu_data[:10]])
+        _ay=np.mean([d['ay'] for d in imu_data[:10]])
+        _az=np.mean([d['az'] for d in imu_data[:10]])
+        _am=np.sqrt(_ax**2+_ay**2+_az**2)
+        if _am > 1.0:
+            _r=float(np.arctan2(_ay/_am,_az/_am))
+            _p=float(np.arctan2(-_ax/_am,np.sqrt((_ay/_am)**2+(_az/_am)**2)))
+            cr,sr=np.cos(_r/2),np.sin(_r/2); cp,sp=np.cos(_p/2),np.sin(_p/2)
+            eskf.q=quat_normalize(np.array([cr*cp,sr*cp,cr*sp,-sr*sp]))
+
     # Velocity init from first two UNIQUE GNSS positions
     unique2 = []
     _pv_lat, _pv_lon = None, None

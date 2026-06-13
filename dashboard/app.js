@@ -50,6 +50,7 @@ function initLeafletMap() {
 
   gnssPolyline = L.polyline([], { color: "#ef4444", weight: 2.5, opacity: 0.9 }).addTo(gmap);
   eskfPolyline = L.polyline([], { color: "#3b82f6", weight: 2.5, opacity: 0.9 }).addTo(gmap);
+  L.control.layers(null, {"GNSS (red)": gnssPolyline, "ESKF (blue)": eskfPolyline}, {collapsed:false, position:"topright"}).addTo(gmap);
 
   mapReady = true;
 
@@ -201,6 +202,7 @@ function connectSocket() {
   });
 
   socket.on("live_eskf", (doc) => {
+    if (selectedSession !== "live") return;
     if (doc.device_id !== selectedDevice) return;
     lastPacketAt = Date.now();
     packetCount++;

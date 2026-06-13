@@ -97,18 +97,19 @@ def handle_imu_hf(payload):
     fw = payload.get("v")
     samples = payload.get("imu", [])
     t_server = now_utc()
+    docs=[]
     for s in samples[:200]:
         if not isinstance(s, list) or len(s) < 7:
             continue
-        try:
-            imu_hf_col.insert_one({
-                "device_id": device_id, "session_id": session_id,
-                "fw_version": fw, "t_ms": int(s[0]), "t_server": t_server,
-                "accel_mps2": [float(s[1]),float(s[2]),float(s[3])],
-                "gyro_radps": [float(s[4]),float(s[5]),float(s[6])],
-            })
-        except PyMongoError:
-            pass
+        docs.append({
+            "device_id": device_id, "session_id": session_id,
+            "fw_version": fw, "t_ms": int(s[0]), "t_server": t_server,
+            "accel_mps2": [float(s[1]),float(s[2]),float(s[3])],
+            "gyro_radps": [float(s[4]),float(s[5]),float(s[6])],
+        })
+    if docs:
+        try: imu_hf_col.insert_many(docs, ordered=False)
+        except PyMongoError: pass
 
 def handle_payload(payload):
     global packet_count
