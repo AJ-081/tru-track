@@ -286,6 +286,60 @@ def gnss_track(device_id): return _gnss_track(device_id)
 @jwt_required(optional=True)
 def eskf_track(device_id): return _eskf_track(device_id)
 
+@app.route("/api/trip/<device_id>")
+@app.route("/api/v1/trip/<device_id>")
+@jwt_required()
+def trip_report(device_id):
+    import math
+    q = request_session_filter(device_id)
+    eq = dict(q); eq["lat"]={"$nin":[None,0]}; eq["lon"]={"$nin":[None,0]}
+    ev = list(db.eskf_state.find(eq, {"_id":0,"lat":1,"lon":1,"vE":1,"vN":1,
+        "t_server":1,"t_ms":1}).sort("t_server",1).limit(50000))
+    gv = list(db.gnss_raw.find(q, {"_id":0,"sats":1,"t_ms":1,"t_server":1}
+        ).sort("t_server",1).limit(50000))
+    if not ev:
+        return jsonify({"error":"no eskf data"}), 404
+    def hav(a,b):
+        R=6371000; p1,p2=math.radians(a[0]),math.radians(b[0])
+        dp=math.radians(b[0]-a[0]); dl=math.radians(b[1]-a[1])
+        x=math.sin(dp/2)**2+math.cos(p1)*math.cos(p2)*math.sin(dl/2)**2
+        return 2*R*math.asin(math.sqrt(x))
+    dist=0.0; speeds=[]
+    for i in range(1,len(ev)):
+        dist+=hav((ev[i-1]["lat"],ev[i-1]["lon"]),(ev[i]["lat"],ev[i]["lon"]))
+        vE=ev[i].get("vE",0) or 0; vN=ev[i].get("vN",0) or 0
+        speeds.append(math.sqrt(vE*vE+vN*vN))
+    max_spd=max(speeds) if speeds else 0
+    mov=[s for s in speeds if s>0.5]
+    avg_spd=sum(mov)/len(mov) if mov else 0
+    # stops: consecutive samples with speed<0.5 for >5s
+    stops=0; run=0
+    for s in speeds:
+        if s<0.5: run+=1
+        else:
+            if run>=25: stops+=1   # ~25 samples @5Hz = 5s
+            run=0
+    if run>=25: stops+=1
+    # GNSS-deny windows: consecutive sats==0
+    deny=0; drun=0
+    for g in gv:
+        if (g.get("sats") or 0)==0: drun+=1
+        else:
+            if drun>=5: deny+=1
+            drun=0
+    if drun>=5: deny+=1
+    t0=ev[0].get("t_ms",0); t1=ev[-1].get("t_ms",0)
+    dur_s=max(0,(t1-t0)/1000.0)
+    return jsonify({
+        "distance_km": round(dist/1000,3),
+        "duration_min": round(dur_s/60,1),
+        "max_speed_kmh": round(max_spd*3.6,1),
+        "avg_speed_kmh": round(avg_spd*3.6,1),
+        "stops": stops,
+        "gnss_deny_windows": deny,
+        "points": len(ev),
+    })
+
 @app.route("/api/imu/latest/<device_id>")
 @app.route("/api/v1/imu/latest/<device_id>")
 @jwt_required(optional=True)

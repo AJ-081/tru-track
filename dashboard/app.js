@@ -143,6 +143,8 @@ async function onSessionChange(sessionId) {
   clearMapTracks();
   stopPolling();
   stopReplay();
+  { const ts=document.getElementById("trip-section"); if(ts) ts.style.display="none"; }
+  { const ts=document.getElementById('trip-section'); if(ts) ts.style.display='none'; }
 
   if (!sessionId || !selectedDevice) return;
 
@@ -159,6 +161,7 @@ async function onSessionChange(sessionId) {
     setConnectionStatus("offline", "Historical session");
     await loadHistoricalTrack(sessionId);
     await loadReplayData(sessionId);
+    loadTripReport(sessionId);
     startPolling(selectedDevice);
   }
 }
@@ -525,3 +528,21 @@ async function updateServerStatus() {
 // Poll server status every 15 seconds
 updateServerStatus();
 setInterval(updateServerStatus, 15000);
+
+async function loadTripReport(sessionId){
+  const sec=document.getElementById("trip-section");
+  if(!sec) return;
+  try{
+    const r=await AUTH.apiFetch("/api/v1/trip/"+selectedDevice+"?session_id="+encodeURIComponent(sessionId));
+    if(!r||!r.ok){sec.style.display="none";return;}
+    const t=await r.json();
+    if(t.error){sec.style.display="none";return;}
+    document.getElementById("trip-dist").textContent=t.distance_km+" km";
+    document.getElementById("trip-dur").textContent=t.duration_min+" min";
+    document.getElementById("trip-max").textContent=t.max_speed_kmh+" km/h";
+    document.getElementById("trip-avg").textContent=t.avg_speed_kmh+" km/h";
+    document.getElementById("trip-stops").textContent=t.stops;
+    document.getElementById("trip-deny").textContent=t.gnss_deny_windows;
+    sec.style.display="block";
+  }catch(e){sec.style.display="none";}
+}
