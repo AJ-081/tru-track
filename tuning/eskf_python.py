@@ -37,6 +37,8 @@ DEFAULT_CFG = dict(
     max_dt          = 0.5,       # s — IMU at 5Hz in DB
     zupt_acc_std    = 0.3,       # m/s²
     zupt_gyr_std    = 0.05,      # rad/s
+    nhc_min_speed_mps = 1.0,     # apply NHC only when moving
+    zupt_gnss_stop_mps = 0.30,   # apply ZUPT only when GNSS/state speed is stopped
 )
 
 
@@ -474,201 +476,214 @@ def replay_session(imu_data, gnss_data, cfg, gnss_deny_ranges=None):
     """
     Run ESKF over a stored session with custom parameters.
 
-    imu_data:  list of dicts {t_ms, ax, ay, az, gx, gy, gz}   (100 Hz)
-    gnss_data: list of dicts {t_ms, lat, lon, alt, speed, course, fix_valid}  (1 Hz)
-    cfg:       dict of ESKF parameters (keys from DEFAULT_CFG)
-    gnss_deny_ranges: list of [t_start_ms, t_end_ms] to block GNSS updates
-
-    Returns:
-      track:   list of {t_ms, lat, lon, alt, vE, vN, roll, pitch, yaw}
-      nis_seq: list of {t_ms, NIS} (one per GNSS update)
-      cov_seq: list of {t_ms, P_pos_E, P_pos_N, P_pos_U, P_vel_E, P_vel_N}
-      summary: dict with stats
+    IMPORTANT v10 behaviour:
+      • IMU and GNSS are both sorted and cleaned before replay.
+      • GNSS deny windows are interpreted as milliseconds FROM SESSION START.
+      • NHC is not applied blindly; it is gated by horizontal speed.
+      • ZUPT is not applied from IMU-only static detection while driving; it is
+        gated by GNSS/state speed.
+      • Summary includes applied/gated counts so the UI can reveal replay bugs.
     """
+    cfg = {**DEFAULT_CFG, **(cfg or {})}
     eskf = Eskf3D(cfg)
     track, nis_seq, cov_seq = [], [], []
 
-    deny_ranges = gnss_deny_ranges or []
+    # Clean IMU
+    imu_sorted = []
+    for d in sorted(imu_data or [], key=lambda x: x.get('t_ms', 0)):
+        try:
+            t = float(d.get('t_ms', 0))
+            ax = float(d.get('ax', 0)); ay = float(d.get('ay', 0)); az = float(d.get('az', 0))
+            gx = float(d.get('gx', 0)); gy = float(d.get('gy', 0)); gz = float(d.get('gz', 0))
+            if not np.isfinite([t, ax, ay, az, gx, gy, gz]).all():
+                continue
+            imu_sorted.append({'t_ms': t, 'ax': ax, 'ay': ay, 'az': az, 'gx': gx, 'gy': gy, 'gz': gz})
+        except Exception:
+            continue
 
+    # Clean GNSS
+    gnss_clean = []
+    for g in sorted(gnss_data or [], key=lambda x: x.get('t_ms', 0)):
+        try:
+            t = float(g.get('t_ms', 0))
+            lat = float(g.get('lat', 0)); lon = float(g.get('lon', 0)); alt = float(g.get('alt', 0) or 0)
+            if not np.isfinite([t, lat, lon, alt]).all():
+                continue
+            if lat == 0 or lon == 0:
+                continue
+            if not bool(g.get('fix_valid', True)):
+                continue
+            gnss_clean.append({
+                't_ms': t, 'lat': lat, 'lon': lon, 'alt': alt,
+                'speed': float(g.get('speed', 0) or 0),
+                'course': float(g.get('course', 0) or 0),
+                'fix_valid': True,
+                'sats': g.get('sats', None),
+                'hdop': g.get('hdop', None),
+            })
+        except Exception:
+            continue
+
+    if not imu_sorted:
+        return [], [], [], {'error': 'No valid IMU samples after cleaning'}
+    if not gnss_clean:
+        return [], [], [], {'error': 'No valid GNSS fixes after cleaning'}
+
+    # Deduplicate GNSS fixes. Firmware may publish the same GNSS fix at 5 Hz.
+    deduped = []
+    prev = None
+    for g in gnss_clean:
+        key = (round(g['lat'], 8), round(g['lon'], 8), round(g['alt'], 2))
+        if key == prev:
+            continue
+        prev = key
+        deduped.append(g)
+    gnss_list = deduped
+
+    init_gnss = gnss_list[0]
+    eskf.init_lla(init_gnss['lat'], init_gnss['lon'], init_gnss.get('alt', 0))
+
+    # Roll/pitch from initial stationary gravity if usable.
+    if len(imu_sorted) >= 5:
+        win = imu_sorted[:min(20, len(imu_sorted))]
+        _ax = np.mean([d['ax'] for d in win]); _ay = np.mean([d['ay'] for d in win]); _az = np.mean([d['az'] for d in win])
+        _am = np.sqrt(_ax**2 + _ay**2 + _az**2)
+        if 5.0 < _am < 15.0:
+            _r = float(np.arctan2(_ay/_am, _az/_am))
+            _p = float(np.arctan2(-_ax/_am, np.sqrt((_ay/_am)**2 + (_az/_am)**2)))
+            cr, sr = np.cos(_r/2), np.sin(_r/2)
+            cp, sp = np.cos(_p/2), np.sin(_p/2)
+            eskf.q = quat_normalize(np.array([cr*cp, sr*cp, cr*sp, -sr*sp]))
+
+    # Initial velocity/yaw from first moving GNSS pair, if possible.
+    eskf.vE = 0.0; eskf.vN = 0.0
+    for i in range(min(len(gnss_list)-1, 10)):
+        g0, g1 = gnss_list[i], gnss_list[i+1]
+        dt_s = (g1['t_ms'] - g0['t_ms']) / 1000.0
+        if dt_s < 0.2:
+            continue
+        saved = (GeoUtils._ref_lat, GeoUtils._ref_lon, GeoUtils._ref_alt)
+        GeoUtils.set_reference(g0['lat'], g0['lon'], g0.get('alt', 0))
+        E1, N1, _ = GeoUtils.lla_to_enu(g1['lat'], g1['lon'], g1.get('alt', 0))
+        GeoUtils._ref_lat, GeoUtils._ref_lon, GeoUtils._ref_alt = saved
+        dist = float(np.hypot(E1, N1))
+        if dist < 1.0:
+            continue
+        vE_est = E1 / dt_s; vN_est = N1 / dt_s
+        spd_est = float(np.hypot(vE_est, vN_est))
+        if 0.3 < spd_est < 60.0:
+            eskf.vE = float(vE_est); eskf.vN = float(vN_est)
+            eskf.set_initial_yaw(float(np.arctan2(vE_est, vN_est)))
+            break
+
+    session_t0 = min(imu_sorted[0]['t_ms'], gnss_list[0]['t_ms'])
+    deny_ranges = gnss_deny_ranges or []
     def is_denied(t_ms):
+        rel = t_ms - session_t0
         for a, b in deny_ranges:
-            if a <= t_ms <= b:
+            if float(a) <= rel <= float(b):
                 return True
         return False
 
-    # Build GNSS lookup by t_ms (nearest)
-    gnss_list = sorted(gnss_data, key=lambda x: x['t_ms'])
-    gnss_idx  = 0
-    gnss_used = set()
-
-    # Find good init fix
-    init_gnss = next((g for g in gnss_list if g.get('fix_valid', True)
-                      and g.get('lat', 0) != 0), None)
-    if not init_gnss:
-        return [], [], [], {"error": "No valid GNSS fix found in session"}
-
-    eskf.init_lla(init_gnss['lat'], init_gnss['lon'], init_gnss.get('alt', 0))
-
-    # Attitude init: roll/pitch from gravity vector (first 10 IMU samples)
-    if len(imu_data) >= 5:
-        _ax=np.mean([d['ax'] for d in imu_data[:10]])
-        _ay=np.mean([d['ay'] for d in imu_data[:10]])
-        _az=np.mean([d['az'] for d in imu_data[:10]])
-        _am=np.sqrt(_ax**2+_ay**2+_az**2)
-        if _am > 1.0:
-            _r=float(np.arctan2(_ay/_am,_az/_am))
-            _p=float(np.arctan2(-_ax/_am,np.sqrt((_ay/_am)**2+(_az/_am)**2)))
-            cr,sr=np.cos(_r/2),np.sin(_r/2); cp,sp=np.cos(_p/2),np.sin(_p/2)
-            eskf.q=quat_normalize(np.array([cr*cp,sr*cp,cr*sp,-sr*sp]))
-
-    # Velocity init from first two UNIQUE GNSS positions
-    unique2 = []
-    _pv_lat, _pv_lon = None, None
-    for g in gnss_list:
-        if g.get('lat') == _pv_lat and g.get('lon') == _pv_lon:
-            continue
-        _pv_lat, _pv_lon = g.get('lat'), g.get('lon')
-        unique2.append(g)
-        if len(unique2) >= 5:  # look at first 5 unique to find motion
-            break
-
-    # Find first pair with real movement (>1m) for velocity estimate
-    eskf.vE = 0.0; eskf.vN = 0.0
-    for i in range(len(unique2)-1):
-        g0, g1 = unique2[i], unique2[i+1]
-        dt_s = (g1['t_ms'] - g0['t_ms']) / 1000.0
-        if dt_s < 0.05:
-            continue
-        # Temporarily set reference to compute ENU
-        _saved_lat = GeoUtils._ref_lat
-        _saved_lon = GeoUtils._ref_lon
-        _saved_alt = GeoUtils._ref_alt
-        GeoUtils.set_reference(g0['lat'], g0['lon'], g0.get('alt', 0))
-        E1, N1, _ = GeoUtils.lla_to_enu(g1['lat'], g1['lon'], g1.get('alt', 0))
-        # Restore reference
-        import math as _m
-        GeoUtils._ref_lat = _saved_lat
-        GeoUtils._ref_lon = _saved_lon
-        GeoUtils._ref_alt = _saved_alt
-        dist = np.sqrt(E1**2 + N1**2)
-        if dist < 0.5:  # < 0.5m movement, skip
-            continue
-        vE_est = E1 / dt_s
-        vN_est = N1 / dt_s
-        spd_est = np.sqrt(vE_est**2 + vN_est**2)
-        if spd_est < 80:  # sanity < 288 km/h
-            eskf.vE = float(vE_est)
-            eskf.vN = float(vN_est)
-            if spd_est > 0.3:
-                eskf.set_initial_yaw(float(np.arctan2(vE_est, vN_est)))
-        break
-
+    gnss_idx = 0
+    gnss_applied = 0
+    gnss_gated = 0
+    gnss_denied = 0
+    gnss_vel_updates = 0
+    nhc_count = 0
+    zupt_count = 0
     nis_values = []
-    t0 = imu_data[0]['t_ms'] if imu_data else 0
+    last_gnss_speed = None
 
-    # Deduplicate GNSS — firmware publishes at 5Hz but GPS updates at 1Hz
-    # Same lat/lon appears 5× — keep only when coordinate actually changed
-    deduped_gnss = []
-    prev_lat, prev_lon = None, None
-    for g in gnss_list:
-        if not g.get('fix_valid', True) or not g.get('lat'):
-            continue
-        if g.get('lat') == prev_lat and g.get('lon') == prev_lon:
-            continue  # skip duplicate fix
-        prev_lat, prev_lon = g.get('lat'), g.get('lon')
-        deduped_gnss.append(g)
-    gnss_list = deduped_gnss
-
-    for imu in sorted(imu_data, key=lambda x: x['t_ms']):
+    # Prime last_t_us so replay starts from the first IMU time.
+    for imu in imu_sorted:
         t_ms = imu['t_ms']
         t_us = int(t_ms * 1000)
 
-        # IMU predict
-        eskf.predict(
-            t_us,
-            imu.get('ax', 0), imu.get('ay', 0), imu.get('az', 0),
-            imu.get('gx', 0), imu.get('gy', 0), imu.get('gz', 0),
-        )
+        eskf.predict(t_us, imu['ax'], imu['ay'], imu['az'], imu['gx'], imu['gy'], imu['gz'])
 
-        # NHC
-        eskf.update_nhc()
-
-        # ZUPT if static
-        ax, ay, az = imu.get('ax',0), imu.get('ay',0), imu.get('az',0)
-        gx, gy, gz = imu.get('gx',0), imu.get('gy',0), imu.get('gz',0)
-        if eskf.is_static(ax, ay, az, gx, gy, gz):
-            eskf.update_zupt()
-
-        # GNSS update (check for new GNSS point at this t_ms)
-        while gnss_idx < len(gnss_list):
+        # Apply all GNSS fixes that occurred up to this IMU timestamp.
+        while gnss_idx < len(gnss_list) and gnss_list[gnss_idx]['t_ms'] <= t_ms:
             g = gnss_list[gnss_idx]
-            if g['t_ms'] > t_ms:
-                break
-            if g['t_ms'] not in gnss_used:
-                gnss_used.add(g['t_ms'])
-                if g.get('fix_valid', True) and g.get('lat', 0) != 0:
-                    if not is_denied(g['t_ms']):
-                        NIS = eskf.update_gnss_lla(g['lat'], g['lon'], g.get('alt', 0))
-                        # Velocity update
-                        spd = g.get('speed', 0)
-                        crs = g.get('course', 0)
-                        if spd and spd > cfg.get('gnss_vel_gate', 0.8):
-                            vE_m = spd * np.sin(np.radians(crs))
-                            vN_m = spd * np.cos(np.radians(crs))
-                            eskf.update_gnss_vel(vE_m, vN_m)
-                        if NIS is not None:
-                            accepted = NIS >= 0
-                            nis_seq.append({'t_ms': t_ms,
-                                            'NIS': abs(NIS),
-                                            'denied': False,
-                                            'gated': not accepted})
-                            if accepted:
-                                nis_values.append(NIS)
+            last_gnss_speed = float(g.get('speed', 0) or 0)
+            if is_denied(g['t_ms']):
+                gnss_denied += 1
+                nis_seq.append({'t_ms': t_ms, 'NIS': None, 'denied': True, 'gated': False})
+            else:
+                NIS = eskf.update_gnss_lla(g['lat'], g['lon'], g.get('alt', 0))
+                if NIS is not None:
+                    if NIS >= 0:
+                        gnss_applied += 1
+                        nis_values.append(float(NIS))
                     else:
-                        nis_seq.append({'t_ms': t_ms, 'NIS': None, 'denied': True})
+                        gnss_gated += 1
+                    nis_seq.append({'t_ms': t_ms, 'NIS': abs(float(NIS)), 'denied': False, 'gated': bool(NIS < 0)})
+                spd = float(g.get('speed', 0) or 0)
+                crs = float(g.get('course', 0) or 0)
+                if cfg.get('use_gnss_vel', True) and spd > cfg.get('gnss_vel_gate', 0.8):
+                    vE_m = spd * np.sin(np.radians(crs))
+                    vN_m = spd * np.cos(np.radians(crs))
+                    eskf.update_gnss_vel(vE_m, vN_m)
+                    gnss_vel_updates += 1
             gnss_idx += 1
 
-        # Record track at every IMU step
-        if eskf.initialized:
-            lat, lon, alt = eskf.get_lla()
-            vE, vN, vU    = eskf.get_velocity()
-            roll, pitch, yaw = eskf.get_euler()
-            track.append({
+        state_speed = float(np.hypot(eskf.vE, eskf.vN))
+        # NHC only when moving. Blind NHC on bad yaw/low speed can pull the track away.
+        if cfg.get('use_nhc', True) and state_speed >= cfg.get('nhc_min_speed_mps', 1.0):
+            eskf.update_nhc()
+            nhc_count += 1
+
+        # ZUPT must be GNSS/state-speed gated; IMU-only ZUPT is unsafe on smooth straight driving.
+        stop_gate = cfg.get('zupt_gnss_stop_mps', 0.30)
+        speed_for_stop = last_gnss_speed if last_gnss_speed is not None else state_speed
+        if cfg.get('use_zupt', True) and speed_for_stop <= stop_gate and eskf.is_static(imu['ax'], imu['ay'], imu['az'], imu['gx'], imu['gy'], imu['gz']):
+            eskf.update_zupt()
+            zupt_count += 1
+
+        lat, lon, alt = eskf.get_lla()
+        vE, vN, vU = eskf.get_velocity()
+        roll, pitch, yaw = eskf.get_euler()
+        track.append({
+            't_ms': t_ms,
+            'lat': round(lat, 7), 'lon': round(lon, 7), 'alt': round(alt, 2),
+            'vE': round(vE, 3), 'vN': round(vN, 3), 'vU': round(vU, 3),
+            'roll': round(roll, 4), 'pitch': round(pitch, 4), 'yaw': round(yaw, 4),
+        })
+        if len(track) % 10 == 0:
+            diag = eskf.get_cov_diag()
+            cov_seq.append({
                 't_ms': t_ms,
-                'lat': round(lat, 7), 'lon': round(lon, 7), 'alt': round(alt, 2),
-                'vE': round(vE, 3), 'vN': round(vN, 3), 'vU': round(vU, 3),
-                'roll': round(roll, 4), 'pitch': round(pitch, 4), 'yaw': round(yaw, 4),
+                'P_pos_E': round(float(diag[0]), 4),
+                'P_pos_N': round(float(diag[1]), 4),
+                'P_pos_U': round(float(diag[2]), 4),
+                'P_vel_E': round(float(diag[3]), 4),
+                'P_vel_N': round(float(diag[4]), 4),
+                'P_vel_U': round(float(diag[5]), 4),
             })
 
-            # Covariance record (every 10 IMU steps to reduce data)
-            if len(track) % 10 == 0:
-                diag = eskf.get_cov_diag()
-                cov_seq.append({
-                    't_ms':   t_ms,
-                    'P_pos_E': round(diag[0], 4),
-                    'P_pos_N': round(diag[1], 4),
-                    'P_pos_U': round(diag[2], 4),
-                    'P_vel_E': round(diag[3], 4),
-                    'P_vel_N': round(diag[4], 4),
-                    'P_vel_U': round(diag[5], 4),
-                })
-
-    # Summary stats
     mean_NIS = float(np.mean(nis_values)) if nis_values else None
-    std_NIS  = float(np.std(nis_values))  if nis_values else None
-    summary  = {
-        'imu_count':  len(imu_data),
+    std_NIS = float(np.std(nis_values)) if nis_values else None
+    summary = {
+        'imu_count': len(imu_sorted),
         'gnss_count': len(gnss_list),
-        'track_pts':  len(track),
-        'nis_count':  len(nis_values),
-        'mean_NIS':   round(mean_NIS, 3) if mean_NIS is not None else None,
-        'std_NIS':    round(std_NIS,  3) if std_NIS  is not None else None,
+        'track_pts': len(track),
+        'nis_count': len(nis_values),
+        'mean_NIS': round(mean_NIS, 3) if mean_NIS is not None else None,
+        'std_NIS': round(std_NIS, 3) if std_NIS is not None else None,
         'tuning_verdict': _verdict(mean_NIS),
         'duration_s': (track[-1]['t_ms'] - track[0]['t_ms']) / 1000 if len(track) > 1 else 0,
+        'gnss_applied': gnss_applied,
+        'gnss_gated': gnss_gated,
+        'gnss_denied': gnss_denied,
+        'gnss_vel_updates': gnss_vel_updates,
+        'nhc_count': nhc_count,
+        'zupt_count': zupt_count,
+        'first_imu_t': imu_sorted[0]['t_ms'],
+        'last_imu_t': imu_sorted[-1]['t_ms'],
+        'first_gnss_t': gnss_list[0]['t_ms'],
+        'last_gnss_t': gnss_list[-1]['t_ms'],
     }
-
     return track, nis_seq, cov_seq, summary
-
 
 def _verdict(mean_NIS):
     if mean_NIS is None:

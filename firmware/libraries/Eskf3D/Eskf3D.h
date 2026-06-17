@@ -5,6 +5,16 @@
 
 static constexpr int ESKF_NX = 15;
 
+// Status returned by updateGnssLLA() — lets the caller (firmware
+// telemetry) know exactly what happened this cycle, instead of the
+// update being a black box. Needed to populate gnss_pos_applied /
+// gnss_pos_gated in telemetry and diagnose gating-rejection cascades.
+enum class EskfGnssStatus : uint8_t {
+  SKIPPED = 0,   // not initialized yet — update did nothing
+  APPLIED = 1,   // innovation passed gating, state updated
+  GATED   = 2,   // innovation REJECTED by Mahalanobis gate (outlier)
+};
+
 // ======================================================
 // 3D Error-State Kalman Filter (Vehicle Navigation)
 // Internal frame: ENU
@@ -31,20 +41,23 @@ public:
                float gz);
 
   // ---------- GNSS Update ----------
-  // Position update using LLA
-  void updateGnssLLA(uint64_t t_us, float lat_deg, float lon_deg, float alt_m);
+  // Position update using LLA. Returns whether the update was applied,
+  // gated (rejected as an outlier), or skipped (filter not initialized).
+  EskfGnssStatus updateGnssLLA(uint64_t t_us, float lat_deg, float lon_deg, float alt_m);
 
   // Optional GNSS velocity update (ENU)
   void updateGnssVel(float vE, float vN, float vU);
 
   // ---------- Non-Holonomic Update ----------
-  // Force lateral/vertical body velocity to zero
-  // Call this after predict() usually
-  void updateNonHolonomic();
+  // Force lateral/vertical body velocity to zero. Call after predict().
+  // Returns true if the update actually ran (filter was initialized),
+  // false if skipped.
+  bool updateNonHolonomic();
 
   // ---------- Zero Velocity Update (ZUPT) ----------
-  // Force ALL velocity to zero (vehicle stopped)
-  void updateZeroVelocity();
+  // Force ALL velocity to zero (vehicle stopped). Returns true if the
+  // update actually ran, false if skipped (filter not initialized).
+  bool updateZeroVelocity();
 
   // Helper to detect static condition
   // Returns true if accel/gyro variance is low enough
@@ -62,6 +75,12 @@ public:
   void getLastPosInnovation(float &dE, float &dN, float &dU) const;
   void getLastVelInnovation(float &dVE, float &dVN, float &dVU) const;
   void getCovDiag(float diag[15]) const;
+
+  // Bias outputs — gyro bias already existed via internal state; this
+  // adds the matching accel-bias accessor so a runaway accel bias
+  // (a real IMU-mistuning failure mode) is visible in telemetry.
+  void getGyroBias(float &bgx_out, float &bgy_out, float &bgz_out) const;
+  void getAccelBias(float &bax_out, float &bay_out, float &baz_out) const;
 
 private:
   // ---------- Covariance ----------

@@ -396,11 +396,15 @@ def docs_to_csv_rows(device_id):
          "gyro_radps":1,"gyro_bias_radps":1}).sort("t_server",1))
     gnss_docs = list(db.gnss_raw.find(bq,
         {"_id":0,"t_ms":1,"t_server":1,"fix_valid":1,"lat":1,"lon":1,"alt":1,
-         "speed":1,"course":1,"sats":1,"hdop":1,"fix_type":1,"age_ms":1}).sort("t_server",1))
+         "speed":1,"course":1,"sats":1,"hdop":1,"fix_type":1,"age_ms":1,
+         "gal_sv":1,"irnss_sv":1,"constellations_used":1}).sort("t_server",1))
     eskf_docs = list(db.eskf_state.find(bq,
         {"_id":0,"t_ms":1,"t_server":1,"init_valid":1,"alignment_valid":1,
          "lat":1,"lon":1,"alt":1,"vE":1,"vN":1,"vU":1,
-         "roll":1,"pitch":1,"yaw":1,"innov":1}).sort("t_server",1))
+         "roll":1,"pitch":1,"yaw":1,"innov":1,
+         "gnss_pos_applied":1,"gnss_pos_gated":1,"nhc_applied":1,"zupt_applied":1,
+         "accel_bias_mps2":1,"yaw_init_source":1,"yaw_init_speed_mps":1,
+         "yaw_init_course_deg":1}).sort("t_server",1))
 
     def idx(docs):
         d = {}
@@ -433,6 +437,8 @@ def docs_to_csv_rows(device_id):
             "gnss_speed":gnss.get("speed",""),"gnss_course":gnss.get("course",""),
             "gnss_sats":gnss.get("sats",""),"gnss_hdop":gnss.get("hdop",""),
             "gnss_fix_type":gnss.get("fix_type",""),"gnss_age_ms":gnss.get("age_ms",""),
+            "gnss_gal_sv":gnss.get("gal_sv",""),"gnss_irnss_sv":gnss.get("irnss_sv",""),
+            "gnss_constellations_used":",".join(gnss.get("constellations_used") or []),
             "eskf_init_valid":eskf.get("init_valid",""),
             "eskf_alignment_valid":eskf.get("alignment_valid",""),
             "eskf_lat":eskf.get("lat",""),"eskf_lon":eskf.get("lon",""),
@@ -442,6 +448,20 @@ def docs_to_csv_rows(device_id):
             "eskf_yaw":eskf.get("yaw",""),
             "eskf_innov_pos_norm":innov.get("pos_norm",""),
             "eskf_innov_vel_norm":innov.get("vel_norm",""),
+            "eskf_innov_dE":innov.get("dE",""),"eskf_innov_dN":innov.get("dN",""),
+            "eskf_innov_dU":innov.get("dU",""),
+            "eskf_innov_dVE":innov.get("dVE",""),"eskf_innov_dVN":innov.get("dVN",""),
+            "eskf_innov_dVU":innov.get("dVU",""),
+            "eskf_gnss_pos_applied":eskf.get("gnss_pos_applied",""),
+            "eskf_gnss_pos_gated":eskf.get("gnss_pos_gated",""),
+            "eskf_nhc_applied":eskf.get("nhc_applied",""),
+            "eskf_zupt_applied":eskf.get("zupt_applied",""),
+            "eskf_accel_bias_x":_e(eskf.get("accel_bias_mps2") or [],0),
+            "eskf_accel_bias_y":_e(eskf.get("accel_bias_mps2") or [],1),
+            "eskf_accel_bias_z":_e(eskf.get("accel_bias_mps2") or [],2),
+            "eskf_yaw_init_source":eskf.get("yaw_init_source",""),
+            "eskf_yaw_init_speed_mps":eskf.get("yaw_init_speed_mps",""),
+            "eskf_yaw_init_course_deg":eskf.get("yaw_init_course_deg",""),
             "imu_calibrated":imu.get("calibrated",False),
             "imu_accel_raw_x":_e(ar,0),"imu_accel_raw_y":_e(ar,1),"imu_accel_raw_z":_e(ar,2),
             "imu_gyro_raw_x":_e(gr,0),"imu_gyro_raw_y":_e(gr,1),"imu_gyro_raw_z":_e(gr,2),
@@ -461,9 +481,15 @@ def _session_export():
         "t_server_utc","t_server_ist","t_epoch_ms_ist","ntp_synced",
         "gnss_fix_valid","gnss_lat","gnss_lon","gnss_alt",
         "gnss_speed","gnss_course","gnss_sats","gnss_hdop","gnss_fix_type","gnss_age_ms",
+        "gnss_gal_sv","gnss_irnss_sv","gnss_constellations_used",
         "eskf_init_valid","eskf_alignment_valid",
         "eskf_lat","eskf_lon","eskf_alt","eskf_vE","eskf_vN","eskf_vU",
         "eskf_roll","eskf_pitch","eskf_yaw","eskf_innov_pos_norm","eskf_innov_vel_norm",
+        "eskf_innov_dE","eskf_innov_dN","eskf_innov_dU",
+        "eskf_innov_dVE","eskf_innov_dVN","eskf_innov_dVU",
+        "eskf_gnss_pos_applied","eskf_gnss_pos_gated","eskf_nhc_applied","eskf_zupt_applied",
+        "eskf_accel_bias_x","eskf_accel_bias_y","eskf_accel_bias_z",
+        "eskf_yaw_init_source","eskf_yaw_init_speed_mps","eskf_yaw_init_course_deg",
         "imu_calibrated",
         "imu_accel_raw_x","imu_accel_raw_y","imu_accel_raw_z",
         "imu_gyro_raw_x","imu_gyro_raw_y","imu_gyro_raw_z",
@@ -478,6 +504,52 @@ def _session_export():
     fname = f"tru-track-{device_id.replace(':','-')}-{suf}.csv"
     return Response(buf.getvalue(), mimetype="text/csv",
         headers={"Content-Disposition":f'attachment; filename="{fname}"'})
+
+
+# ── IMU HF EXPORT (100Hz raw+corrected) ─────────────────────────────────────
+def _imu_hf_export():
+    device_id  = request.args.get("device_id")
+    session_id = request.args.get("session_id")
+    if not device_id: return jsonify({"error":"device_id required"}), 400
+    q = request_session_filter(device_id)
+    docs = list(db.imu_hf.find(q,
+        {"_id":0,"device_id":1,"session_id":1,"fw_version":1,"t_ms":1,
+         "t_server":1,"ax_raw":1,"ay_raw":1,"az_raw":1,
+         "gx_raw":1,"gy_raw":1,"gz_raw":1,"fs":1,"gs":1,
+         "accel_mps2":1,"gyro_radps":1}).sort("t_server",1))
+    if not docs: return jsonify({"error":"No IMU HF data for this session"}), 404
+
+    fieldnames = ["device_id","session_id","fw_version","t_ms","t_server_utc",
+        "ax_raw","ay_raw","az_raw","gx_raw","gy_raw","gz_raw","fs","gs",
+        "accel_mps2_x","accel_mps2_y","accel_mps2_z",
+        "gyro_radps_x","gyro_radps_y","gyro_radps_z"]
+    buf = io.StringIO()
+    w = csv.DictWriter(buf, fieldnames=fieldnames, extrasaction="ignore")
+    w.writeheader()
+    for d in docs:
+        am = d.get("accel_mps2") or [None]*3
+        gm = d.get("gyro_radps") or [None]*3
+        ts = d.get("t_server")
+        w.writerow({
+            "device_id":d.get("device_id"),"session_id":d.get("session_id"),
+            "fw_version":d.get("fw_version"),"t_ms":d.get("t_ms"),
+            "t_server_utc":ts.isoformat() if isinstance(ts,datetime) else ts,
+            "ax_raw":d.get("ax_raw",""),"ay_raw":d.get("ay_raw",""),"az_raw":d.get("az_raw",""),
+            "gx_raw":d.get("gx_raw",""),"gy_raw":d.get("gy_raw",""),"gz_raw":d.get("gz_raw",""),
+            "fs":d.get("fs",""),"gs":d.get("gs",""),
+            "accel_mps2_x":am[0],"accel_mps2_y":am[1],"accel_mps2_z":am[2],
+            "gyro_radps_x":gm[0],"gyro_radps_y":gm[1],"gyro_radps_z":gm[2],
+        })
+    suf = (session_id or "").replace(":","-")[-8:] or \
+          datetime.now(IST).strftime("%Y%m%d_%H%M%S")
+    fname = f"tru-track-imuhf-{device_id.replace(':','-')}-{suf}.csv"
+    return Response(buf.getvalue(), mimetype="text/csv",
+        headers={"Content-Disposition":f'attachment; filename="{fname}"'})
+
+@app.route("/api/session/export-imu-hf")
+@app.route("/api/v1/session/export-imu-hf")
+@jwt_required(optional=True)
+def imu_hf_export(): return _imu_hf_export()
 
 @app.route("/api/session/export")
 @app.route("/api/v1/session/export")

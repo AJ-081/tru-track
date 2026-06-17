@@ -460,7 +460,10 @@ static void eskf_zupt_update(float *P, float &vE, float &vN, float &vU) {
   }
 }
 
-static void eskf_gnss_pos_update(float *P,
+// Returns true if the update was applied, false if rejected by gating
+// (Mahalanobis outlier check). This lets the caller report exactly what
+// happened this cycle instead of it being an invisible internal decision.
+static bool eskf_gnss_pos_update(float *P,
                                  // nominal state refs
                                  float &pE, float &pN, float &pU, float &vE,
                                  float &vN, float &vU, float &qw, float &qx,
@@ -500,7 +503,7 @@ static void eskf_gnss_pos_update(float *P,
 
   float Sinv[9];
   if (!EskfMath::inv3(S, Sinv))
-    return;
+    return false;   // singular S — cannot update; treat as not-applied
 
 #if ESKF_USE_GATING
   // Mahalanobis distance check: d = r^T * S^-1 * r
@@ -515,9 +518,9 @@ static void eskf_gnss_pos_update(float *P,
   d2 = rtSinv[0] * r[0] + rtSinv[1] * r[1] + rtSinv[2] * r[2];
 
   if (d2 > (ESKF_GATING_THRESH * ESKF_GATING_THRESH)) {
-    // Outlier rejected!
-    // We can optionally return here or just skip update
-    return;
+    // Outlier rejected — caller (firmware telemetry) needs to know this
+    // happened, so it's a return value now instead of a silent skip.
+    return false;
   }
 #endif
 
@@ -591,6 +594,8 @@ static void eskf_gnss_pos_update(float *P,
 
   // Copy back
   EskfMath::matCopy(Ptmp, P, 15, 15);
+
+  return true;   // update applied successfully
 }
 
 static void eskf_predict_P(float *P, float dt, float qw, float qx, float qy,
@@ -856,17 +861,18 @@ void Eskf3D::predict(uint64_t t_us, float ax, float ay, float az, float gx,
   eskf_predict_P(P, dt, qw, qx, qy, qz, fx, fy, fz, wx, wy, wz);
 }
 
-void Eskf3D::updateGnssLLA(uint64_t t_us, float lat_deg, float lon_deg,
+EskfGnssStatus Eskf3D::updateGnssLLA(uint64_t t_us, float lat_deg, float lon_deg,
                            float alt_m) {
   (void)t_us;
   if (!initialized)
-    return;
+    return EskfGnssStatus::SKIPPED;
 
   float E, N, U;
   GeoUtils::llaToEnu(lat_deg, lon_deg, alt_m, E, N, U);
 
-  eskf_gnss_pos_update(P, pE, pN, pU, vE, vN, vU, qw, qx, qy, qz, bax, bay, baz,
-                       bgx, bgy, bgz, last_pos_innov, E, N, U);
+  bool applied = eskf_gnss_pos_update(P, pE, pN, pU, vE, vN, vU, qw, qx, qy, qz,
+                       bax, bay, baz, bgx, bgy, bgz, last_pos_innov, E, N, U);
+  return applied ? EskfGnssStatus::APPLIED : EskfGnssStatus::GATED;
 }
 
 void Eskf3D::updateGnssVel(float vE_in, float vN_in, float vU_in) {
@@ -883,19 +889,35 @@ void Eskf3D::updateGnssVel(float vE_in, float vN_in, float vU_in) {
 #endif
 }
 
-void Eskf3D::updateNonHolonomic() {
+bool Eskf3D::updateNonHolonomic() {
 #if ESKF_USE_NHC
   if (!initialized)
-    return;
+    return false;
   eskf_nhc_update(P, pE, pN, pU, vE, vN, vU, qw, qx, qy, qz, bax, bay, baz, bgx,
                   bgy, bgz);
+  return true;
+#else
+  return false;
 #endif
 }
 
-void Eskf3D::updateZeroVelocity() {
+bool Eskf3D::updateZeroVelocity() {
   if (!initialized)
-    return;
+    return false;
   eskf_zupt_update(P, vE, vN, vU);
+  return true;
+}
+
+void Eskf3D::getGyroBias(float &bgx_out, float &bgy_out, float &bgz_out) const {
+  bgx_out = bgx;
+  bgy_out = bgy;
+  bgz_out = bgz;
+}
+
+void Eskf3D::getAccelBias(float &bax_out, float &bay_out, float &baz_out) const {
+  bax_out = bax;
+  bay_out = bay;
+  baz_out = baz;
 }
 
 bool Eskf3D::isStatic(float ax, float ay, float az, float gx, float gy,

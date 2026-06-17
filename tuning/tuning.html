@@ -62,9 +62,12 @@ select option{background:#0e0e11}
 #deny-tags{display:flex;flex-wrap:wrap;margin-top:4px}
 .params{padding:8px 10px;flex:1}
 .pr{margin-bottom:9px}
-.pr-top{display:flex;justify-content:space-between;margin-bottom:2px}
-.pr-name{font-size:8.5px;font-weight:600}
-.pr-val{font-size:8.5px;font-family:var(--mono);color:var(--accent)}
+.pr-top{display:flex;justify-content:space-between;align-items:center;margin-bottom:2px;gap:6px}
+.pr-name{font-size:8.5px;font-weight:600;flex:1}
+.pr-num{width:78px;flex-shrink:0;background:#0e0e11;color:var(--accent);
+  border:1px solid var(--border2);border-radius:5px;padding:2px 5px;
+  font-size:8.5px;font-family:var(--mono);text-align:right;outline:none}
+.pr-num:focus{border-color:var(--accent)}
 input[type=range]{width:100%;accent-color:var(--accent);cursor:pointer;height:3px}
 .pr-hint{font-size:7.5px;color:var(--muted);margin-top:1px}
 .swrow{display:flex;align-items:center;justify-content:space-between;padding:4px 0}
@@ -119,6 +122,24 @@ input[type=range]{width:100%;accent-color:var(--accent);cursor:pointer;height:3p
   border:1px solid rgba(245,158,11,0.25)!important;border-radius:8px!important}
 .leaflet-popup-content{color:#f1f1f3;font-size:9px;font-family:var(--mono);margin:8px 12px!important;padding:0!important}
 .leaflet-popup-tip{background:rgba(12,14,20,0.95)!important}
+.params{
+  background:#f5f5f4;
+  color:#18181b;
+  padding:16px 16px 20px;
+  border-radius:10px;
+  margin:6px 8px;
+  box-shadow:inset 0 0 0 1px rgba(0,0,0,0.06);
+}
+.params .pr{margin-bottom:18px}
+.params .pr-name{font-size:12px;font-weight:700;color:#18181b}
+.params .pr-num{
+  width:96px;font-size:12px;padding:6px 8px;
+  background:#ffffff;color:#b45309;
+  border:1px solid #d4d4d8;border-radius:7px;
+}
+.params .pr-num:focus{border-color:#f59e0b}
+.params input[type=range]{height:6px;accent-color:#f59e0b}
+.params .pr-hint{font-size:10px;color:#52525b}
 </style>
 </head>
 <body>
@@ -166,42 +187,50 @@ input[type=range]{width:100%;accent-color:var(--accent);cursor:pointer;height:3p
       <div id="deny-tags"></div>
     </div>
 
-    <div class="sec">⚙ Parameters</div>
+    <div class="sec">⚙ Parameters <span style="text-transform:none;font-weight:400">— drag slider or type exact value</span></div>
     <div class="params">
       <div class="pr">
-        <div class="pr-top"><span class="pr-name">σ_acc — accel noise (m/s²/√Hz)</span><span class="pr-val" id="v-sa">0.150</span></div>
-        <input type="range" id="s-sa" min="0.01" max="2.0" step="0.01" value="0.15" oninput="sv('sa','s-sa','v-sa',3)">
+        <div class="pr-top"><span class="pr-name">σ_acc — accel noise (m/s²/√Hz)</span>
+          <input class="pr-num" type="number" id="n-sa" min="0" step="0.001" value="0.15" oninput="nv('s-sa','n-sa')"></div>
+        <input type="range" id="s-sa" min="0.01" max="5.0" step="0.01" value="0.15" oninput="sv('s-sa','n-sa',3)">
         <div class="pr-hint">↑ trust IMU less · ↓ trust IMU more (smoother heading)</div>
       </div>
       <div class="pr">
-        <div class="pr-top"><span class="pr-name">σ_gyro — gyro noise (rad/s/√Hz)</span><span class="pr-val" id="v-sg">0.0050</span></div>
-        <input type="range" id="s-sg" min="0.001" max="0.1" step="0.001" value="0.005" oninput="sv('sg','s-sg','v-sg',4)">
+        <div class="pr-top"><span class="pr-name">σ_gyro — gyro noise (rad/s/√Hz)</span>
+          <input class="pr-num" type="number" id="n-sg" min="0" step="0.0001" value="0.005" oninput="nv('s-sg','n-sg')"></div>
+        <input type="range" id="s-sg" min="0.0005" max="0.3" step="0.0005" value="0.005" oninput="sv('s-sg','n-sg',4)">
       </div>
       <div class="pr">
-        <div class="pr-top"><span class="pr-name">σ_gnss_pos — GNSS pos (m)</span><span class="pr-val" id="v-sp">3.0</span></div>
-        <input type="range" id="s-sp" min="0.5" max="20.0" step="0.5" value="3.0" oninput="sv('sp','s-sp','v-sp',1)">
+        <div class="pr-top"><span class="pr-name">σ_gnss_pos — GNSS pos (m)</span>
+          <input class="pr-num" type="number" id="n-sp" min="0" step="0.01" value="3.0" oninput="nv('s-sp','n-sp')"></div>
+        <input type="range" id="s-sp" min="0.1" max="50.0" step="0.1" value="3.0" oninput="sv('s-sp','n-sp',2)">
         <div class="pr-hint">↑ trust GPS less (more IMU) · ↓ trust GPS more</div>
       </div>
       <div class="pr">
-        <div class="pr-top"><span class="pr-name">σ_gnss_vel — GNSS vel (m/s)</span><span class="pr-val" id="v-sv">0.150</span></div>
-        <input type="range" id="s-sv" min="0.05" max="2.0" step="0.05" value="0.15" oninput="sv('sv','s-sv','v-sv',3)">
+        <div class="pr-top"><span class="pr-name">σ_gnss_vel — GNSS vel (m/s)</span>
+          <input class="pr-num" type="number" id="n-sv" min="0" step="0.001" value="0.15" oninput="nv('s-sv','n-sv')"></div>
+        <input type="range" id="s-sv" min="0.01" max="5.0" step="0.01" value="0.15" oninput="sv('s-sv','n-sv',3)">
       </div>
       <div class="pr">
-        <div class="pr-top"><span class="pr-name">σ_gnss_alt — GNSS alt (m)</span><span class="pr-val" id="v-su">2.5</span></div>
-        <input type="range" id="s-su" min="0.5" max="15.0" step="0.5" value="2.5" oninput="sv('su','s-su','v-su',1)">
+        <div class="pr-top"><span class="pr-name">σ_gnss_alt — GNSS alt (m)</span>
+          <input class="pr-num" type="number" id="n-su" min="0" step="0.01" value="2.5" oninput="nv('s-su','n-su')"></div>
+        <input type="range" id="s-su" min="0.1" max="30.0" step="0.1" value="2.5" oninput="sv('s-su','n-su',2)">
       </div>
       <div class="pr">
-        <div class="pr-top"><span class="pr-name">Gating threshold (χ²)</span><span class="pr-val" id="v-gt">10.0</span></div>
-        <input type="range" id="s-gt" min="1.0" max="50.0" step="0.5" value="10.0" oninput="sv('gt','s-gt','v-gt',1)">
+        <div class="pr-top"><span class="pr-name">Gating threshold (χ²)</span>
+          <input class="pr-num" type="number" id="n-gt" min="0" step="0.1" value="10.0" oninput="nv('s-gt','n-gt')"></div>
+        <input type="range" id="s-gt" min="0.5" max="500.0" step="0.5" value="10.0" oninput="sv('s-gt','n-gt',1)">
         <div class="pr-hint">↓ stricter outlier rejection · ↑ accept more GPS</div>
       </div>
       <div class="pr">
-        <div class="pr-top"><span class="pr-name">σ_acc_bias (random walk)</span><span class="pr-val" id="v-sab">0.000500</span></div>
-        <input type="range" id="s-sab" min="0.00001" max="0.005" step="0.00001" value="0.0005" oninput="sv('sab','s-sab','v-sab',6)">
+        <div class="pr-top"><span class="pr-name">σ_acc_bias (random walk)</span>
+          <input class="pr-num" type="number" id="n-sab" min="0" step="0.000001" value="0.0005" oninput="nv('s-sab','n-sab')"></div>
+        <input type="range" id="s-sab" min="0.00001" max="0.02" step="0.00001" value="0.0005" oninput="sv('s-sab','n-sab',6)">
       </div>
       <div class="pr">
-        <div class="pr-top"><span class="pr-name">σ_gyro_bias (random walk)</span><span class="pr-val" id="v-sgb">0.000200</span></div>
-        <input type="range" id="s-sgb" min="0.00001" max="0.002" step="0.00001" value="0.0002" oninput="sv('sgb','s-sgb','v-sgb',6)">
+        <div class="pr-top"><span class="pr-name">σ_gyro_bias (random walk)</span>
+          <input class="pr-num" type="number" id="n-sgb" min="0" step="0.000001" value="0.0002" oninput="nv('s-sgb','n-sgb')"></div>
+        <input type="range" id="s-sgb" min="0.00001" max="0.01" step="0.00001" value="0.0002" oninput="sv('s-sgb','n-sgb',6)">
       </div>
     </div>
 
@@ -304,22 +333,31 @@ cInnov=mkChart('c-innov',[
   {label:'|r| m',data:[],borderColor:'#f59e0b',borderWidth:1.5,pointRadius:0,fill:false},
 ]);
 
-// Slider sync
-function sv(k,sid,vid,dec){
-  const v=parseFloat(document.getElementById(sid).value);
-  document.getElementById(vid).textContent=v.toFixed(dec);
+// Slider <-> number sync.
+// sv(): slider moved -> push value into its paired number field.
+// nv(): number typed -> push value into its paired slider (browser clamps
+//       the slider's own display to its min/max, but the NUMBER field is
+//       the value actually read by getParams(), so typed values are never
+//       silently capped even if they exceed the slider's range).
+function sv(sliderId,numId,dec){
+  const v=parseFloat(document.getElementById(sliderId).value);
+  document.getElementById(numId).value=v.toFixed(dec);
+}
+function nv(sliderId,numId){
+  const v=parseFloat(document.getElementById(numId).value);
+  if(!isNaN(v))document.getElementById(sliderId).value=v;
 }
 
 function getParams(){
   return{
-    sigma_acc:       +document.getElementById('s-sa').value,
-    sigma_gyro:      +document.getElementById('s-sg').value,
-    sigma_gnss_pos:  +document.getElementById('s-sp').value,
-    sigma_gnss_vel:  +document.getElementById('s-sv').value,
-    sigma_gnss_alt:  +document.getElementById('s-su').value,
-    gating_thresh:   +document.getElementById('s-gt').value,
-    sigma_acc_bias:  +document.getElementById('s-sab').value,
-    sigma_gyro_bias: +document.getElementById('s-sgb').value,
+    sigma_acc:       +document.getElementById('n-sa').value,
+    sigma_gyro:      +document.getElementById('n-sg').value,
+    sigma_gnss_pos:  +document.getElementById('n-sp').value,
+    sigma_gnss_vel:  +document.getElementById('n-sv').value,
+    sigma_gnss_alt:  +document.getElementById('n-su').value,
+    gating_thresh:   +document.getElementById('n-gt').value,
+    sigma_acc_bias:  +document.getElementById('n-sab').value,
+    sigma_gyro_bias: +document.getElementById('n-sgb').value,
     use_gnss_vel:    document.getElementById('sw-gv').checked,
     use_altitude:    document.getElementById('sw-alt').checked,
     use_nhc:         document.getElementById('sw-nhc').checked,
@@ -404,7 +442,7 @@ async function run(){
     if(d.error){st('Error: '+d.error);return;}
     render(d,params);
     document.getElementById('dl-btn').disabled=false;
-    st(`✓ Done — ${d.summary.track_pts} pts, NIS=${d.summary.mean_NIS}`);
+    st(`✓ Done — track=${d.summary.track_pts}, GNSS applied=${d.summary.gnss_applied||0}/${d.summary.gnss_count||d.gnss_count||0}, gated=${d.summary.gnss_gated||0}, IMU=${d.summary.imu_count||d.imu_count||0}`);
   }catch(e){st('Failed: '+e.message);}
   finally{btn.className='run-btn run-idle';btn.textContent='▶ Run ESKF Replay';}
 }
@@ -424,7 +462,7 @@ function render(d,params){
   document.getElementById('map-stats').style.display='block';
   const mn=summary.mean_NIS;
   document.getElementById('st-nis').textContent=mn!=null?mn.toFixed(2):'—';
-  document.getElementById('st-gc').textContent=summary.nis_count||'—';
+  document.getElementById('st-gc').textContent=(summary.gnss_applied!=null&&summary.gnss_count!=null)?`${summary.gnss_applied}/${summary.gnss_count}`:(summary.nis_count||'—');
   document.getElementById('st-dur').textContent=summary.duration_s?(summary.duration_s/60).toFixed(1)+'m':'—';
   const v=summary.tuning_verdict||'';
   const vc=v==='well_tuned'?'vg':v.includes('slightly')?'vy':'vr';

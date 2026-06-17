@@ -260,7 +260,7 @@ async function updateHealth(deviceId) {
       sats !== null ? `HDOP ${hdop !== null ? hdop.toFixed(1) : "—"}` : "No data");
 
     // WiFi
-    const rssi  = st.wifi_rssi_dbm !== undefined ? st.wifi_rssi_dbm : null;
+    const rssi  = st.lte_rssi_dbm !== undefined ? st.lte_rssi_dbm : null;
     const wifiQ = rssi !== null ? Math.max(0, Math.min(100, Math.round((rssi + 90) / 60 * 100))) : 0;
     const wifiColor = rssi === null ? "#555" : rssi >= -65 ? "#10b981" : rssi >= -80 ? "#eab308" : "#ef4444";
     setBar("h-wifi", wifiQ, wifiColor,
@@ -372,13 +372,19 @@ async function exportGeoJSON() {
   await triggerDownload(url);
 }
 
+async function exportImuHf() {
+  if (!selectedDevice || !selectedSession || selectedSession === "live") return;
+  const url = `/api/v1/session/export-imu-hf?device_id=${encodeURIComponent(selectedDevice)}&session_id=${encodeURIComponent(selectedSession)}`;
+  await triggerDownload(url);
+}
+
 async function triggerDownload(url) {
   try {
     const res = await AUTH.apiFetch(url);
     if (!res || !res.ok) { alert("Export failed — no data for this session."); return; }
     const blob = await res.blob();
     const disp = res.headers.get("Content-Disposition") || "";
-    const match = disp.match(/filename=([^;]+)/);
+    const match = disp.match(/filename="?([^";]+)"?/);
     const fname = match ? match[1].trim() : "tru-track-export";
     const a = document.createElement("a");
     a.href     = URL.createObjectURL(blob);
@@ -493,7 +499,7 @@ function updateReplayTime(idx) {
 }
 
 function setExportButtons(enabled) {
-  ["btn-csv", "btn-geojson", "btn-replay"].forEach(id => {
+  ["btn-csv", "btn-geojson", "btn-imuhf", "btn-replay"].forEach(id => {
     const el = document.getElementById(id);
     if (el) el.disabled = !enabled;
   });
