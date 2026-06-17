@@ -349,8 +349,12 @@ def imu_latest(device_id):
     return jsonify(_serialize(doc) if doc else {})
 
 # ── ALERTS ────────────────────────────────────────────────────────────────────
-def _get_alerts(device_id):
-    doc    = db.device_latest.find_one({"device_id": device_id}) or {}
+def _compute_alerts(doc):
+    """Pure alert logic, reused by both the single-device endpoint and
+    the fleet batch endpoint so the two never drift out of sync again
+    (which is exactly what happened with the wifi_rssi_dbm/lte_rssi_dbm
+    field rename — only the dashboard side got fixed, this side didn't,
+    until now)."""
     status = doc.get("status") or {}
     result = []
     if not status.get("gnss_fix"):
@@ -358,9 +362,9 @@ def _get_alerts(device_id):
     elif (status.get("sats") or 0) < 4:
         result.append({"level":"warning","code":"GNSS_FEW_SATS",
                         "msg":f"Only {status.get('sats',0)} satellites"})
-    rssi = status.get("wifi_rssi_dbm")
-    if rssi is not None and rssi < -80:
-        result.append({"level":"warning","code":"SIGNAL_WEAK","msg":f"WiFi RSSI {rssi} dBm"})
+    rssi = status.get("lte_rssi_dbm")
+    if rssi is not None and rssi < -100:
+        result.append({"level":"warning","code":"SIGNAL_WEAK","msg":f"4G RSSI {rssi} dBm"})
     last_seen = doc.get("last_seen")
     if isinstance(last_seen, datetime):
         age = (datetime.utcnow() - last_seen).total_seconds()
@@ -371,7 +375,11 @@ def _get_alerts(device_id):
         result.append({"level":"error","code":"BATTERY_CRITICAL","msg":f"Battery {bpct}%"})
     elif bpct is not None and 10 <= bpct < 20:
         result.append({"level":"warning","code":"BATTERY_LOW","msg":f"Battery {bpct}%"})
-    return jsonify(result)
+    return result
+
+def _get_alerts(device_id):
+    doc = db.device_latest.find_one({"device_id": device_id}) or {}
+    return jsonify(_compute_alerts(doc))
 
 @app.route("/api/alerts/<device_id>")
 @app.route("/api/v1/alerts/<device_id>")
@@ -741,7 +749,8 @@ def _fleet():
             "speed_mps":         gnss.get("speed"),
             "fw_version":        d.get("fw_version"),
             "eskf_init":         eskf_ok,
-            "wifi_rssi_dbm":     status.get("wifi_rssi_dbm"),
+            "lte_rssi_dbm":      status.get("lte_rssi_dbm"),
+            "alerts":            _compute_alerts(d),
         })
     return jsonify(result)
 
