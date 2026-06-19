@@ -234,15 +234,41 @@ def handle_payload(payload):
         latest_col.update_one(
             {"device_id": device_id},
             {"$set": {
-                "device_id": device_id,
+                "device_id":  device_id,
                 "session_id": common.get("session_id"),
-                "t_server": t_server,
+                "fw_version": common.get("fw_version"),
+                "last_seen":  t_server,
+                "t_server":   t_server,
+                "status":     payload.get("status"),
+                "gnss":       payload.get("gnss"),
+                "eskf":       payload.get("eskf"),
+                "imu":        payload.get("imu"),
             }},
             upsert=True,
         )
     except PyMongoError as exc:
         log.error("Mongo metadata update failed: %s", exc.__class__.__name__)
 
+    try:
+        sessions_col.update_one(
+            {"session_id": common.get("session_id")},
+            {"$set": {
+                "device_id":       device_id,
+                "session_id":      common.get("session_id"),
+                "fw_version":      common.get("fw_version"),
+                "boot_count":      common.get("boot_count"),
+                "last_seen":       t_server,
+                "last_packet_at":  t_server,
+            },
+            "$setOnInsert": {
+                "started_at_server":   t_server,
+                "started_t_epoch_ms":  common.get("t_epoch_ms", 0),
+            },
+            "$inc": {"packet_count": 1}},
+            upsert=True,
+        )
+    except PyMongoError as exc:
+        log.error("Mongo sessions upsert failed: %s", exc.__class__.__name__)
     if packet_count % 100 == 1:
         log.info(
             "packets=%s inserts=%s duplicates=%s errors=%s last_device=%s",
