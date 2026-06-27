@@ -486,27 +486,8 @@ button{font-family:var(--sans);cursor:pointer;}
 </head>
 <body>
 
-<!-- LOGIN -->
-<div id="login-overlay">
-  <div class="login-box">
-    <div class="login-logo">TT</div>
-    <div class="login-title">TRU-TRACK</div>
-    <div class="login-sub">TruVibe Technologies · SVNIT Surat</div>
-    <div class="login-field">
-      <label class="login-label">Email</label>
-      <input class="login-input" id="li-email" type="email" value="devaamdalal555@gmail.com" autocomplete="username"/>
-    </div>
-    <div class="login-field">
-      <label class="login-label">Password</label>
-      <input class="login-input" id="li-pass" type="password" autocomplete="current-password" placeholder="••••••••"/>
-    </div>
-    <button class="btn btn-primary login-btn" onclick="AUTH.login()">Sign in</button>
-    <div class="login-err" id="li-err">Invalid credentials — try again</div>
-  </div>
-</div>
-
 <!-- APP -->
-<div class="app" id="app" style="display:none;">
+<div class="app" id="app">
 
   <!-- TOP NAVBAR -->
   <nav class="navbar">
@@ -610,16 +591,7 @@ button{font-family:var(--sans);cursor:pointer;}
           <option value="topo">Topo</option>
         </select>
         <button class="btn btn-ghost glass btn-sm" onclick="LIVE.fitBounds()">⊞ Fit</button>
-        <div style="position:relative;display:inline-block;" id="export-dropdown-wrap">
-          <button class="btn btn-ghost glass btn-sm" onclick="document.getElementById('export-menu').classList.toggle('open')" id="export-menu-btn">⬇ Export ▾</button>
-          <div id="export-menu" style="display:none;position:fixed;right:16px;top:58px;z-index:9000;background:var(--surface);border:1px solid var(--border-hi);border-radius:var(--radius-sm);box-shadow:var(--shadow-lg);min-width:180px;overflow:hidden;">
-            <div style="padding:5px 10px;font-size:10px;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:.5px;border-bottom:1px solid var(--border);">Standard (5 Hz)</div>
-            <button class="export-menu-item" onclick="LIVE.exportCSV();this.closest('#export-menu').classList.remove('open')">⬇ CSV</button>
-            <button class="export-menu-item" onclick="LIVE.exportGeoJSON();this.closest('#export-menu').classList.remove('open')">⬇ GeoJSON</button>
-            <div style="padding:5px 10px;font-size:10px;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:.5px;border-top:1px solid var(--border);border-bottom:1px solid var(--border);">HF IMU (100 Hz)</div>
-            <button class="export-menu-item" onclick="LIVE.exportHF();this.closest('#export-menu').classList.remove('open')">⬇ HF IMU CSV</button>
-          </div>
-        </div>
+        <button class="btn btn-ghost glass btn-sm" id="export-menu-btn" onclick="toggleExportMenu()">⬇ Export ▾</button>
       </div>
 
       <!-- LEFT SIDEBAR (unified) -->
@@ -844,16 +816,38 @@ button{font-family:var(--sans);cursor:pointer;}
   </div>
 </div><!-- /app -->
 
-<script>
-document.addEventListener('click', e => {
-  const wrap = document.getElementById('export-dropdown-wrap');
-  const menu = document.getElementById('export-menu');
-  if (wrap && menu && !wrap.contains(e.target)) menu.classList.remove('open');
-});
-</script>
+
 <script src="socket.io.min.js"></script>
 <script src="leaflet.js"></script>
 <script src="chart.umd.min.js"></script>
 <script src="app.js"></script>
+
+<!-- Export menu — at body level to avoid stacking context issues -->
+<div id="export-menu" style="display:none;position:fixed;z-index:99999;background:var(--surface);border:1px solid var(--border-hi);border-radius:var(--radius-sm);box-shadow:var(--shadow-lg);min-width:190px;overflow:hidden;">
+  <div style="padding:5px 10px;font-size:10px;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:.5px;border-bottom:1px solid var(--border);">Standard (5 Hz)</div>
+  <button class="export-menu-item" onclick="LIVE.exportCSV();closeExportMenu()">⬇ CSV</button>
+  <button class="export-menu-item" onclick="LIVE.exportGeoJSON();closeExportMenu()">⬇ GeoJSON</button>
+  <div style="padding:5px 10px;font-size:10px;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:.5px;border-top:1px solid var(--border);border-bottom:1px solid var(--border);">HF IMU (100 Hz)</div>
+  <button class="export-menu-item" onclick="LIVE.exportHF();closeExportMenu()">⬇ HF IMU CSV</button>
+</div>
+<script>
+function toggleExportMenu() {
+  const btn = document.getElementById('export-menu-btn');
+  const menu = document.getElementById('export-menu');
+  const r = btn.getBoundingClientRect();
+  menu.style.top = (r.bottom + 4) + 'px';
+  menu.style.right = (window.innerWidth - r.right) + 'px';
+  menu.style.display = menu.style.display === 'none' ? 'block' : 'none';
+}
+function closeExportMenu() {
+  document.getElementById('export-menu').style.display = 'none';
+}
+document.addEventListener('click', e => {
+  const btn = document.getElementById('export-menu-btn');
+  const menu = document.getElementById('export-menu');
+  if (btn && menu && !btn.contains(e.target) && !menu.contains(e.target))
+    menu.style.display = 'none';
+});
+</script>
 </body>
 </html>

@@ -488,7 +488,7 @@ const LIVE = {
   _map: null, _mapInit: false, _tile: null,
   _gnssLine: null, _eskfLine: null, _curMarker: null,
   _gnssOn: true, _eskfOn: true,
-  _deviceId: null, _sessionId: '', _liveSessionId: '',
+  _deviceId: null, _sessionId: '', _liveSessionId: '', _trackLoaded: false,
   _gnssTrack: [], _eskfTrack: [],  // full arrays for replay
   _pollTimer: null,
   _socket: null,
@@ -551,6 +551,7 @@ const LIVE = {
     } catch(e) {}
     this._sessionId = '';
     this._liveSessionId = '';
+    this._trackLoaded = false;
     // Clear map immediately so old session track disappears
     this._gnssTrack = []; this._eskfTrack = [];
     if (this._gnssLine)  { this._map && this._map.removeLayer(this._gnssLine);  this._gnssLine = null; }
@@ -563,21 +564,36 @@ const LIVE = {
 
   async onSessionChange() {
     this._sessionId = document.getElementById('live-sess-sel').value;
+
+    if (this._sessionId) {
+      // Historic session — stop live poll and remove live marker
+      clearInterval(this._pollTimer);
+      this._pollTimer = null;
+      if (this._curMarker) { this._map && this._map.removeLayer(this._curMarker); this._curMarker = null; }
+    } else {
+      // Back to live — restart poll
+      this._trackLoaded = false;
+      this._startPoll();
+    }
+
     await this._loadAll();
-    // Track loaded at end position by default (set in _loadTrack)
   },
 
   async _loadAll() {
     if (!this._deviceId) return;
-    // In live mode: fetch latest doc first to get current session_id and populate fields
     if (!this._sessionId) {
+      // Live mode — fetch telemetry for sidebar, load track once, then poll takes over
       try {
         const latest = await AUTH.apiJSON(`/api/v1/device/latest/${encodeURIComponent(this._deviceId)}`);
         this._applyTelemetry(latest);
         if (latest.session_id) this._liveSessionId = latest.session_id;
-      } catch(e) { console.error('latest fetch error', e); }
+      } catch(e) {}
+      if (!this._trackLoaded) { this._trackLoaded = true; await this._loadTrack(); }
+      await this._loadAlerts();
+    } else {
+      // Historic session
+      await Promise.all([this._loadTrack(), this._loadAlerts()]);
     }
-    await Promise.all([this._loadTrack(), this._loadAlerts(), this.loadTripReport()]);
   },
 
   async _loadTrack() {
@@ -813,30 +829,34 @@ const LIVE = {
           this._applyTelemetry(latest);
           if (latest.session_id) this._liveSessionId = latest.session_id;
 
-          // Update map with latest position
+          // Update map: GNSS point
           const g = latest.gnss || {};
           if (g.lat && g.lon && this._map) {
-            const pt = { lat: g.lat, lon: g.lon, t_server: latest.t_server };
-            // Append to track (avoid duplicate last point)
             const last = this._gnssTrack[this._gnssTrack.length - 1];
             if (!last || last.lat !== g.lat || last.lon !== g.lon) {
-              this._gnssTrack.push(pt);
-              // Extend the polyline instead of redrawing everything
-              if (this._gnssLine) {
-                this._gnssLine.addLatLng([g.lat, g.lon]);
-              } else {
-                this._gnssLine = L.polyline([[g.lat, g.lon]], { color: '#ff4757', weight: 2, opacity: .7 }).addTo(this._map);
-              }
+              this._gnssTrack.push({ lat: g.lat, lon: g.lon, t_server: latest.t_server });
+              if (this._gnssLine) this._gnssLine.addLatLng([g.lat, g.lon]);
+              else this._gnssLine = L.polyline([[g.lat, g.lon]], { color: '#ff4757', weight: 2, opacity: .7 }).addTo(this._map);
             }
-            // Move/create marker
-            if (this._curMarker) {
-              this._curMarker.setLatLng([g.lat, g.lon]);
-            } else {
-              this._curMarker = L.circleMarker([g.lat, g.lon], {
-                radius: 7, color: '#ff4757', fillColor: '#ff4757', fillOpacity: .9, weight: 2,
-              }).addTo(this._map);
+          }
+          // Update map: ESKF point (top-level eskf_lat/eskf_lon in latest doc)
+          const eLat = latest.eskf_lat ?? null;
+          const eLon = latest.eskf_lon ?? null;
+          if (eLat && eLon && this._map) {
+            const lastE = this._eskfTrack[this._eskfTrack.length - 1];
+            if (!lastE || lastE.lat !== eLat || lastE.lon !== eLon) {
+              this._eskfTrack.push({ lat: eLat, lon: eLon, t_server: latest.t_server });
+              if (this._eskfLine) this._eskfLine.addLatLng([eLat, eLon]);
+              else this._eskfLine = L.polyline([[eLat, eLon]], { color: '#00d4ff', weight: 2.5, opacity: .9 }).addTo(this._map);
             }
-            // Pan map to follow
+            // Marker tracks ESKF position (more accurate than GNSS)
+            if (this._curMarker) this._curMarker.setLatLng([eLat, eLon]);
+            else this._curMarker = L.circleMarker([eLat, eLon], { radius: 7, color: '#00d4ff', fillColor: '#00d4ff', fillOpacity: .9, weight: 2 }).addTo(this._map);
+            this._map.panTo([eLat, eLon], { animate: true, duration: 0.3 });
+          } else if (g.lat && g.lon && this._map) {
+            // Fallback to GNSS if no ESKF
+            if (this._curMarker) this._curMarker.setLatLng([g.lat, g.lon]);
+            else this._curMarker = L.circleMarker([g.lat, g.lon], { radius: 7, color: '#ff4757', fillColor: '#ff4757', fillOpacity: .9, weight: 2 }).addTo(this._map);
             this._map.panTo([g.lat, g.lon], { animate: true, duration: 0.3 });
           }
 
@@ -1216,11 +1236,17 @@ async function bootApp() {
 /* ─── Entry point ─── */
 window.addEventListener('load', async () => {
   loadTheme();
-  const ok = await AUTH.tryAutoLogin();
-  if (ok) {
-    document.getElementById('login-overlay').style.display = 'none';
-    document.getElementById('app').style.display = 'flex';
-    bootApp();
-  }
-  // else login overlay stays visible — user must authenticate
+  // No login required — auto-fetch a token using the service account
+  try {
+    const res = await fetch('/api/auth/login', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email: 'devaamdalal555@gmail.com', password: 'TruTrack2026!' }),
+    });
+    if (res.ok) {
+      const d = await res.json();
+      AUTH.token = d.access_token;
+    }
+  } catch(e) {}
+  bootApp();
 });
