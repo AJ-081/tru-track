@@ -2,6 +2,7 @@
  * ╔══════════════════════════════════════════════════════════════╗
  * ║       TRU-TRACK v2.5  —  4G + L89HA DUAL-MODULE            ║
  * ║   ESP32 + A7672S (4G transport) + L89HA (GNSS) + MPU6050  ║
+ * ║   + MAX17048 (fuel gauge, full hardware rev)               ║
  * ║                                                              ║
  * ║   WiFi REMOVED entirely.                                    ║
  * ║   GNSS : Quectel L89HA, NMEA streaming on UART1, parsed    ║
@@ -180,8 +181,8 @@
 // ════════════════════════════════════════════════════════════════
 static const int MODEM_RX_PIN = 17;   // ESP32 UART2 RX  ← A7672S TX
 static const int MODEM_TX_PIN = 16;   // ESP32 UART2 TX  → A7672S RX
-static const int GPS_RX_PIN   = 27;   // ESP32 UART1 RX  ← L89HA TX
-static const int GPS_TX_PIN   = 26;   // ESP32 UART1 TX  → L89HA RX
+static const int GPS_RX_PIN   = 26;   // ESP32 UART1 RX  ← L89HA TX
+static const int GPS_TX_PIN   = 27;   // ESP32 UART1 TX  → L89HA RX
 static const long GPS_BAUD    = 9600; // L89HA default NMEA baud
 
 // ════════════════════════════════════════════════════════════════
@@ -206,7 +207,7 @@ static const uint32_t MODEM_BAUD_BOOT = 115200;   // factory default
 static const uint32_t MODEM_BAUD_FAST = 921600;   // runtime target
 static const uint32_t CSQ_POLL_MS     = 30000;    // signal quality — diagnostic only, kept slow (briefly blocks outbox drain)
 
-static const char* FW_VERSION   = "tt-v2.7.3";
+static const char* FW_VERSION   = "tt-v2.7.4";
 static const char* ESKF_CFG_VER = "tt-eskf-v1.0";
 
 // ── LED ────────────────────────────────────────────────────────
@@ -410,6 +411,116 @@ HardwareSerial Modem(2);
 HardwareSerial GpsSerial(1);
 TinyGPSPlus    gps;
 MPU6050        imu_mpu;
+
+// ════════════════════════════════════════════════════════════════
+//  MAX17048 FUEL GAUGE — register-level driver (no external lib)
+//  Transplanted from FuelGauge_Standalone.ino, adapted for v2.7.
+//  Hardware: Cell 1 mid-tap → IC +  |  3.3V → VCC  |  ALRT → GPIO4
+// ════════════════════════════════════════════════════════════════
+// Pin + threshold constants (from TruTrackHardware.h)
+#define FG_I2C_ADDR    0x36
+#define FG_REG_VCELL   0x02
+#define FG_REG_SOC     0x04
+#define FG_REG_CONFIG  0x0C
+#define FG_REG_VALRT   0x14
+#define FG_REG_CRATE   0x16
+#define FG_REG_VRESET  0x18
+#define FG_REG_STATUS  0x1A
+#define FG_REG_VERSION 0x08
+#define FG_RCOMP0      0x97
+#define FG_TEMPCO_UP  -0.5f
+#define FG_TEMPCO_DN  -5.0f
+#define FG_SOC_ALERT    10
+#define FG_VMIN_MV    3000
+#define FG_VMAX_MV    4250
+static const int      MAX17048_ALRT_PIN    = 4;
+static const float    BATTERY_LOW_PCT      = 15.0f;
+static const float    BATTERY_CRITICAL_PCT =  5.0f;
+static const uint32_t BATTERY_POLL_MS      = 5000;
+
+struct BatteryState {
+    float    voltage_V    = 0.0f;
+    float    soc_pct      = -1.0f;
+    float    crate_pct_hr = 0.0f;
+    bool     low          = false;
+    bool     critical     = false;
+    bool     valid        = false;
+};
+BatteryState bat;
+bool         fg_present  = false;   // set true if IC found at boot
+
+bool fg_read(uint8_t reg, uint16_t &out){
+    Wire.beginTransmission(FG_I2C_ADDR);
+    Wire.write(reg);
+    if(Wire.endTransmission(false)!=0) return false;
+    if(Wire.requestFrom((uint8_t)FG_I2C_ADDR,(uint8_t)2)!=2) return false;
+    out=((uint16_t)Wire.read()<<8)|Wire.read();
+    return true;
+}
+bool fg_write(uint8_t reg, uint16_t val){
+    Wire.beginTransmission(FG_I2C_ADDR);
+    Wire.write(reg);
+    Wire.write((uint8_t)(val>>8));
+    Wire.write((uint8_t)(val&0xFF));
+    return(Wire.endTransmission()==0);
+}
+
+bool fg_begin(){
+    uint16_t ver=0;
+    if(!fg_read(FG_REG_VERSION,ver)){
+        Serial.println("[FUEL] MAX17048 not found — battery fields will stay placeholder.");
+        return false;
+    }
+    Serial.printf("[FUEL] MAX17048 found. IC version: 0x%04X\n",ver);
+    // Clear reset indicator
+    uint16_t st=0; fg_read(FG_REG_STATUS,st);
+    if(st&0x0100) fg_write(FG_REG_STATUS,st&~0x0100);
+    // CONFIG: RCOMP=0x97, SOC alert at FG_SOC_ALERT %
+    uint16_t cfg=0; fg_read(FG_REG_CONFIG,cfg);
+    uint8_t athd=(uint8_t)(32-FG_SOC_ALERT)&0x1F;
+    fg_write(FG_REG_CONFIG,((uint16_t)FG_RCOMP0<<8)|athd);
+    // Voltage alert thresholds
+    fg_write(FG_REG_VALRT,((uint16_t)(FG_VMIN_MV/20)<<8)|(FG_VMAX_MV/20));
+    // VRESET: ~2.5V (captive 2S pack, cell never swapped)
+    uint16_t vr=0; fg_read(FG_REG_VRESET,vr);
+    fg_write(FG_REG_VRESET,((uint16_t)(63<<1)<<8)|(vr&0x00FF));
+    Serial.printf("[FUEL] Init OK. SOC alert @%d%%, VALRT %d-%dmV\n",
+                  FG_SOC_ALERT,FG_VMIN_MV,FG_VMAX_MV);
+    return true;
+}
+
+void fg_update(){
+    uint16_t rv=0,rs=0,rc=0;
+    if(!fg_read(FG_REG_VCELL,rv)||!fg_read(FG_REG_SOC,rs)||!fg_read(FG_REG_CRATE,rc)){
+        bat.valid=false; return;
+    }
+    bat.voltage_V   =(float)rv*78.125e-6f;
+    bat.soc_pct     =constrain((float)(rs>>8)+(float)(rs&0xFF)/256.0f,0.0f,100.0f);
+    bat.crate_pct_hr=(float)(int16_t)rc*0.208f;
+    bat.low         =(bat.soc_pct<BATTERY_LOW_PCT);
+    bat.critical    =(bat.soc_pct<BATTERY_CRITICAL_PCT);
+    bat.valid       =true;
+}
+
+void fg_handleAlert(){
+    if(digitalRead(MAX17048_ALRT_PIN)==HIGH) return;
+    uint16_t st=0;
+    if(!fg_read(FG_REG_STATUS,st)) return;
+    Serial.printf("[FUEL] ALERT: status=0x%04X (VL=%d VH=%d HD=%d)\n",
+                  st,!!(st&0x1000),!!(st&0x2000),!!(st&0x0400));
+    uint16_t cfg=0;
+    if(fg_read(FG_REG_CONFIG,cfg)) fg_write(FG_REG_CONFIG,cfg&~(1<<5));
+}
+
+void fg_updateTempComp(float temp_C){
+    if(!bat.valid) return;
+    float rf=(float)FG_RCOMP0+(temp_C>20.0f?(temp_C-20.0f)*FG_TEMPCO_UP
+                                            :(temp_C-20.0f)*FG_TEMPCO_DN);
+    uint8_t rcomp=(uint8_t)constrain(rf,0.0f,255.0f);
+    uint16_t cfg=0;
+    if(fg_read(FG_REG_CONFIG,cfg))
+        fg_write(FG_REG_CONFIG,((uint16_t)rcomp<<8)|(cfg&0x00FF));
+}
 Eskf3D         eskf;
 Preferences    prefs;
 
@@ -423,6 +534,7 @@ char     apn[64]={0};
 String   device_id, boot_id, session_id, mqtt_topic, mqtt_hf_topic;
 uint32_t boot_count=0;
 String   reboot_reason;
+String   carrier_name="";          // populated at netAttach from IMSI/COPS
 
 // ── ESKF state ──────────────────────────────────────────────────
 bool eskf_initialized=false, alignment_done=false, gnss_vel_used=false;
@@ -683,15 +795,23 @@ bool gnssInit(){
     Serial.println("[GNSS] L89HA init on UART1...");
     GpsSerial.begin(GPS_BAUD, SERIAL_8N1, GPS_RX_PIN, GPS_TX_PIN);
     GpsSerial.setRxBufferSize(2048);
-    delay(300);
-    // Enable full constellation incl. NavIC/IRNSS, then persist.
+    delay(500);   // let L89HA finish its own startup before we send anything
+
+    // Ensure NMEA output is enabled on this port — guards against a
+    // previously-saved bad config having disabled sentences.
+    // $PSTMNMEACONFIG: port0, rate=1Hz, GGA+RMC+GSV+GSA enabled
+    GpsSerial.println("$PSTMNMEACONFIG,0,1,1,1,1,1,0,0,0,0");
+    delay(200);
+
+    // Enable full constellation incl. NavIC/IRNSS.
     // $PSTMCFGCONST,<GPS>,<GLO>,<GAL>,<BDS>,<QZSS>,<IRNSS> (2=on)
+    // NOTE: $PSTMSAVEPAR deliberately removed — sending it every boot
+    // writes flash unnecessarily and can corrupt saved config mid-init.
+    // The constellation command takes effect immediately without saving.
     GpsSerial.println("$PSTMCFGCONST,2,2,2,2,0,2");
     delay(200);
-    GpsSerial.println("$PSTMSAVEPAR");
-    delay(200);
-    Serial.println("[GNSS] NavIC/IRNSS enable sent ($PSTMCFGCONST + SAVEPAR).");
-    Serial.println("[GNSS] Streaming NMEA — waiting for first fix.");
+
+    Serial.println("[GNSS] NavIC/IRNSS enable sent. Streaming NMEA — waiting for first fix.");
     return true;
 }
 
@@ -813,10 +933,35 @@ bool netAttach(){
 
     modemSend("AT+COPS=0","OK",10000);   // force automatic operator selection
 
-    if(strlen(apn)>0){
+    // APN auto-detection by IMSI prefix (Indian carriers).
+    // User-set APN in NVS always wins; auto-detect is the fallback.
+    // Jio MUST have APN set explicitly — it rejects registration without it.
+    // IMSI prefixes: 405857/405858/405859/405861-865 = Jio
+    //                404010/404003/405010-012 = Airtel
+    //                404005/405005/405030 = Vi/Vodafone
+    //                404009/404060 = BSNL
+    String detectedApn="";
+    if(imsi.startsWith("40585")||imsi.startsWith("40586")){
+        detectedApn="jionet"; carrier_name="Jio";
+    } else if(imsi.startsWith("40401")||imsi.startsWith("40500")||
+              imsi.startsWith("40501")||imsi.startsWith("40401")){
+        detectedApn="airtelgprs.com"; carrier_name="Airtel";
+    } else if(imsi.startsWith("40400")||imsi.startsWith("40450")||
+              imsi.startsWith("40502")||imsi.startsWith("40520")){
+        detectedApn="portalnmms"; carrier_name="Vi";
+    } else if(imsi.startsWith("40406")||imsi.startsWith("40409")){
+        detectedApn="bsnlnet"; carrier_name="BSNL";
+    }
+
+    // NVS APN overrides auto-detect; if neither, use modem default.
+    const char* activeApn=(strlen(apn)>0)?apn:
+                          (detectedApn.length()>0?detectedApn.c_str():"");
+    if(strlen(activeApn)>0){
         char cmd[96];
-        snprintf(cmd,sizeof(cmd),"AT+CGDCONT=1,\"IP\",\"%s\"",apn);
+        snprintf(cmd,sizeof(cmd),"AT+CGDCONT=1,\"IP\",\"%s\"",activeApn);
         modemSend(cmd,"OK",3000);
+        Serial.printf("[4G] APN set: %s (carrier:%s)\n",
+                      activeApn,carrier_name.length()?carrier_name.c_str():"?");
     }
 
     // Wait for registration: EPS (LTE) preferred, accept CS/PS (2G/3G fallback).
@@ -864,6 +1009,7 @@ bool netAttach(){
     String op=modemQuery("AT+COPS?",3000);
     int q1=op.indexOf('"'), q2=op.indexOf('"',q1+1);
     String opName=(q1>=0&&q2>q1)?op.substring(q1+1,q2):"?";
+    if(carrier_name.length()==0) carrier_name=opName;  // IMSI detect wins if set
     Serial.printf("[4G] Registered on \"%s\".\n",opName.c_str());
     return true;
 }
@@ -1492,14 +1638,16 @@ void stageTelemetry(){
     status["mqtt_connected"]     =mqtt_up;
     status["lte_rssi_dbm"]       =lte_rssi;        // was wifi_rssi_dbm
     status["net_up"]             =net_up;
+    status["carrier"]            =carrier_name.length()?carrier_name.c_str():"?";
     status["hf_enabled"]         =hf_enabled;
     status["ntp_synced"]         =ntp_synced;
     status["imu_calibrated"]     =imu_calibrated;
     status["eskf_config_version"]=ESKF_CFG_VER;
-    status["battery_v"]          =0.0f;
-    status["battery_pct"]        =-1;
-    status["battery_low"]        =false;
-    status["battery_critical"]   =false;
+    status["battery_v"]          =bat.valid ? bat.voltage_V : 0.0f;
+    status["battery_pct"]        =bat.valid ? (int)bat.soc_pct : -1;
+    status["battery_low"]        =bat.valid ? bat.low      : false;
+    status["battery_critical"]   =bat.valid ? bat.critical : false;
+    status["battery_crate_pct_hr"]=bat.valid ? bat.crate_pct_hr : 0.0f;
     status["gnss_mode"]          =g_fix.mode;
     status["gnss_age_ms"]        =gnssAgeNow;      // live-computed, not cached
     status["sats_gps"]           =g_fix.gpsSv;
@@ -1630,7 +1778,7 @@ void setup(){
     delay(500);
     Serial.println("\n========================================");
     Serial.printf("  TRU-TRACK %s\n",FW_VERSION);
-    Serial.println("  A7672S 4G + L89HA NavIC GNSS + MPU6050");
+    Serial.println("  A7672S 4G + L89HA NavIC GNSS + MPU6050 + MAX17048");
     Serial.println("========================================");
 
     Wire.begin(21,22);
@@ -1682,6 +1830,17 @@ void setup(){
 
     // ── IMU ─────────────────────────────────────────────────────
     initIMU();
+
+    // ── Fuel gauge (MAX17048) ───────────────────────────────────
+    // Non-blocking: if IC not found, battery fields stay as placeholders.
+    // Wire bus already started above; ALRT pin needs pull-up.
+    pinMode(MAX17048_ALRT_PIN, INPUT_PULLUP);
+    fg_present = fg_begin();
+    if(fg_present){
+        fg_update();   // get first reading immediately
+        Serial.printf("[FUEL] Cell 1: %.3fV  SOC: %.1f%%\n",
+                      bat.voltage_V, bat.soc_pct);
+    }
 
     Serial.println("\nLED: fast=boot  medium=wait_fix  triple=wait_motion  double=aligning  solid=ready  rapid=no_link");
     Serial.printf("HF IMU: %d samples/batch → %s\n",
@@ -1740,6 +1899,26 @@ void loop(){
     if(millis()-lastImuHfMs>=IMU_HF_PUB_MS){
         lastImuHfMs=millis();
         if(stageImuHf()) imu_hf_count=0;
+    }
+
+    // ── Fuel gauge: poll every 5s, alert check every loop ───────
+    if(fg_present){
+        fg_handleAlert();   // non-blocking ALRT pin check, every loop
+        static uint32_t lastFgMs=0;
+        static uint32_t lastTempCompMs=0;
+        uint32_t nowMs=millis();
+        if(nowMs-lastFgMs>=BATTERY_POLL_MS){
+            lastFgMs=nowMs;
+            fg_update();
+        }
+        // Temperature compensation via MPU6050 chip temp (~1/min is plenty)
+        if(nowMs-lastTempCompMs>=60000){
+            lastTempCompMs=nowMs;
+            // MPU6050 chip temp: raw / 340.0 + 36.53 °C
+            int16_t rawT=imu_mpu.getTemperature();
+            float chipTemp=(float)rawT/340.0f+36.53f;
+            fg_updateTempComp(chipTemp);
+        }
     }
 
     // ── Main telemetry at 5 Hz → outbox ─────────────────────────
