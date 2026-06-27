@@ -1,0 +1,236 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>TRU-TRACK · Login</title>
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    min-height: 100vh;
+    background: #0a0a0a;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-family: system-ui, -apple-system, sans-serif;
+    color: #e2e2e2;
+  }
+
+  .card {
+    background: #141414;
+    border: 1px solid rgba(255,255,255,0.08);
+    border-radius: 16px;
+    padding: 40px 36px;
+    width: 100%;
+    max-width: 380px;
+    box-shadow: 0 24px 80px rgba(0,0,0,0.6);
+  }
+
+  .logo {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    margin-bottom: 32px;
+  }
+
+  .logo-icon {
+    width: 40px;
+    height: 40px;
+    background: linear-gradient(135deg, #3b82f6, #8b5cf6);
+    border-radius: 10px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 18px;
+    font-weight: 700;
+    color: #fff;
+    flex-shrink: 0;
+  }
+
+  .logo-text h1 {
+    font-size: 18px;
+    font-weight: 700;
+    letter-spacing: -0.3px;
+    color: #fff;
+  }
+
+  .logo-text p {
+    font-size: 11px;
+    color: #666;
+    margin-top: 1px;
+  }
+
+  .form-group {
+    margin-bottom: 16px;
+  }
+
+  label {
+    display: block;
+    font-size: 12px;
+    font-weight: 500;
+    color: #999;
+    margin-bottom: 6px;
+    letter-spacing: 0.3px;
+  }
+
+  input {
+    width: 100%;
+    background: #1e1e1e;
+    border: 1px solid rgba(255,255,255,0.1);
+    border-radius: 8px;
+    padding: 11px 14px;
+    font-size: 14px;
+    color: #e2e2e2;
+    outline: none;
+    transition: border-color 0.15s;
+    font-family: inherit;
+  }
+
+  input:focus {
+    border-color: #3b82f6;
+  }
+
+  input::placeholder { color: #444; }
+
+  .btn {
+    width: 100%;
+    padding: 12px;
+    background: linear-gradient(135deg, #3b82f6, #8b5cf6);
+    border: none;
+    border-radius: 8px;
+    color: #fff;
+    font-size: 14px;
+    font-weight: 600;
+    cursor: pointer;
+    margin-top: 8px;
+    font-family: inherit;
+    letter-spacing: 0.2px;
+    transition: opacity 0.15s;
+  }
+
+  .btn:hover  { opacity: 0.9; }
+  .btn:active { opacity: 0.8; }
+  .btn:disabled { opacity: 0.5; cursor: not-allowed; }
+
+  .error-box {
+    background: rgba(239,68,68,0.1);
+    border: 1px solid rgba(239,68,68,0.3);
+    border-radius: 8px;
+    padding: 10px 14px;
+    font-size: 13px;
+    color: #f87171;
+    margin-top: 14px;
+    display: none;
+  }
+
+  .footer-note {
+    text-align: center;
+    font-size: 11px;
+    color: #444;
+    margin-top: 24px;
+  }
+</style>
+</head>
+<body>
+
+<div class="card">
+  <div class="logo">
+    <div class="logo-icon">TT</div>
+    <div class="logo-text">
+      <h1>TRU-TRACK</h1>
+      <p>Navigation &amp; Telemetry Platform</p>
+    </div>
+  </div>
+
+  <div class="form-group">
+    <label for="email">Email address</label>
+    <input type="email" id="email" placeholder="you@example.com" autocomplete="email">
+  </div>
+
+  <div class="form-group">
+    <label for="password">Password</label>
+    <input type="password" id="password" placeholder="••••••••" autocomplete="current-password">
+  </div>
+
+  <button class="btn" id="login-btn" onclick="doLogin()">Sign in</button>
+
+  <div class="error-box" id="error-box"></div>
+
+  <div class="footer-note">TRU-TRACK &copy; 2026 &mdash; Secure access only</div>
+</div>
+
+<script>
+  // Redirect if already logged in
+  if (localStorage.getItem("tt_access_token")) {
+    window.location.href = "/";
+  }
+
+  // Allow Enter key to submit
+  document.getElementById("password").addEventListener("keydown", function(e) {
+    if (e.key === "Enter") doLogin();
+  });
+  document.getElementById("email").addEventListener("keydown", function(e) {
+    if (e.key === "Enter") doLogin();
+  });
+
+  function showError(msg) {
+    const box = document.getElementById("error-box");
+    box.textContent = msg;
+    box.style.display = "block";
+  }
+
+  function hideError() {
+    document.getElementById("error-box").style.display = "none";
+  }
+
+  async function doLogin() {
+    hideError();
+
+    const email    = document.getElementById("email").value.trim().toLowerCase();
+    const password = document.getElementById("password").value;
+    const btn      = document.getElementById("login-btn");
+
+    if (!email || !password) {
+      showError("Please enter your email and password.");
+      return;
+    }
+
+    btn.disabled    = true;
+    btn.textContent = "Signing in...";
+
+    try {
+      const res = await fetch("/api/v1/auth/login", {
+        method:  "POST",
+        headers: { "Content-Type": "application/json" },
+        body:    JSON.stringify({ email, password }),
+      });
+
+      const data = await res.json();
+
+      if (!res.ok) {
+        showError(data.error || "Login failed. Check your credentials.");
+        return;
+      }
+
+      // Store tokens
+      localStorage.setItem("tt_access_token",  data.access_token);
+      localStorage.setItem("tt_refresh_token", data.refresh_token);
+      localStorage.setItem("tt_role",          data.role);
+      localStorage.setItem("tt_name",          data.name || "");
+      const exp = Date.now() + (8 * 60 * 60 * 1000) - (60 * 1000);
+      localStorage.setItem("tt_expires_at",    String(exp));
+
+      // Redirect to dashboard
+      window.location.href = "/";
+
+    } catch (err) {
+      showError("Cannot reach the server. Check your connection.");
+    } finally {
+      btn.disabled    = false;
+      btn.textContent = "Sign in";
+    }
+  }
+</script>
+</body>
+</html>

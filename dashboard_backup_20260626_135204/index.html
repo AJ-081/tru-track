@@ -1,0 +1,173 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>TRU-TRACK · Dashboard</title>
+<link rel="stylesheet" href="/style.css">
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+</head>
+<body>
+<div class="app">
+
+  <!-- ── Sidebar ──────────────────────────────────────────────────────────── -->
+  <aside class="sidebar">
+
+    <div class="sidebar-logo">
+      <div class="logo-icon">TT</div>
+      <div class="logo-text">
+        <h1>TRU-TRACK</h1>
+        <p>Navigation Platform</p>
+      </div>
+    </div>
+
+    <!-- Device + Session -->
+    <div class="s-section">
+      <div class="s-label">Device</div>
+      <select id="device-select" onchange="onDeviceChange(this.value)">
+        <option value="">Loading devices...</option>
+      </select>
+
+      <div class="s-label">Session</div>
+      <select id="session-select" onchange="onSessionChange(this.value)" disabled>
+        <option value="">Select a device first</option>
+      </select>
+    </div>
+
+    <!-- Health -->
+    <div class="s-section">
+      <div class="s-label">Health</div>
+
+      <div class="health-item">
+        <div class="health-row">
+          <span class="health-name">GNSS Quality</span>
+          <span class="health-val" id="h-gnss-val">—</span>
+        </div>
+        <div class="health-bar-track">
+          <div class="health-bar-fill" id="h-gnss-bar"></div>
+        </div>
+        <div class="health-sub" id="h-gnss-sub">No device selected</div>
+      </div>
+
+      <div class="health-item">
+        <div class="health-row">
+          <span class="health-name">4G Signal</span>
+          <span class="health-val" id="h-wifi-val">—</span>
+        </div>
+        <div class="health-bar-track">
+          <div class="health-bar-fill" id="h-wifi-bar"></div>
+        </div>
+        <div class="health-sub" id="h-wifi-sub">Pending</div>
+      </div>
+
+      <div class="health-item">
+        <div class="health-row">
+          <span class="health-name">ESKF Filter</span>
+          <span class="health-val" id="h-eskf-val">—</span>
+        </div>
+        <div class="health-bar-track">
+          <div class="health-bar-fill" id="h-eskf-bar"></div>
+        </div>
+        <div class="health-sub" id="h-eskf-sub">Pending</div>
+      </div>
+
+      <div class="health-item">
+        <div class="health-row">
+          <span class="health-name">Battery</span>
+          <span class="health-val" id="h-batt-val">—</span>
+        </div>
+        <div class="health-bar-track">
+          <div class="health-bar-fill" id="h-batt-bar"></div>
+        </div>
+        <div class="health-sub" id="h-batt-sub">N/A — IC pending</div>
+      </div>
+    </div>
+
+    <!-- Alerts -->
+    <div class="s-section">
+      <div class="s-label">Alerts</div>
+      <div class="alert-list" id="alert-list">
+        <div class="no-alerts">No device selected</div>
+      </div>
+    </div>
+
+    <div class="s-section" id="trip-section" style="display:none">
+      <div class="s-label">Trip Report</div>
+      <div class="srv-row"><span class="srv-key">Distance</span><span class="srv-val" id="trip-dist">—</span></div>
+      <div class="srv-row"><span class="srv-key">Duration</span><span class="srv-val" id="trip-dur">—</span></div>
+      <div class="srv-row"><span class="srv-key">Max Speed</span><span class="srv-val" id="trip-max">—</span></div>
+      <div class="srv-row"><span class="srv-key">Avg Speed</span><span class="srv-val" id="trip-avg">—</span></div>
+      <div class="srv-row"><span class="srv-key">Stops</span><span class="srv-val" id="trip-stops">—</span></div>
+      <div class="srv-row"><span class="srv-key">GNSS-Deny</span><span class="srv-val" id="trip-deny">—</span></div>
+    </div>
+	<!-- Server Status -->
+	    <div class="s-section">
+	      <div class="s-label">Server</div>
+	      <div class="srv-chip" id="srv-chip">
+	        <div class="srv-dot" id="srv-dot"></div>
+	        <span id="srv-label">Checking...</span>
+	      </div>
+	      <div class="srv-row"><span class="srv-key">CPU</span><span class="srv-val" id="srv-cpu">—</span></div>
+	      <div class="srv-row"><span class="srv-key">RAM</span><span class="srv-val" id="srv-ram">—</span></div>
+	      <div class="srv-row"><span class="srv-key">Disk</span><span class="srv-val" id="srv-disk">—</span></div>
+	      <div class="srv-row"><span class="srv-key">Services</span><span class="srv-val" id="srv-svcs">—</span></div>
+	    </div>
+
+    <!-- User footer -->
+    <div class="sidebar-footer">
+      <div class="user-info">
+        <div class="user-name" id="user-name">—</div>
+        <div class="user-role" id="user-role">—</div>
+      </div>
+      <a href="/fleet" class="logout-btn" style="display:block;text-align:center;text-decoration:none;margin-bottom:6px;background:rgba(0,242,254,0.08);border:1px solid rgba(0,242,254,0.2);color:#00f2fe">🗺 Fleet Map</a>
+      <button class="logout-btn" onclick="AUTH.logout()">Logout</button>
+    </div>
+
+  </aside>
+
+  <!-- ── Main ──────────────────────────────────────────────────────────────── -->
+  <main class="main">
+
+    <!-- Top bar -->
+    <div class="topbar">
+      <div class="topbar-left">
+        <div class="status-chip">
+          <div class="status-dot offline" id="conn-dot"></div>
+          <span id="conn-label">Not connected</span>
+        </div>
+        <div class="stale-badge" id="stale-badge">⚠ STALE DATA</div>
+        <div class="pkt-counter" id="pkt-counter"></div>
+      </div>
+      <div class="topbar-right">
+        <div class="session-info" id="session-info">No session selected</div>
+        <button class="topbar-btn" id="btn-csv"     onclick="exportCSV()"     disabled>↓ CSV</button>
+        <button class="topbar-btn" id="btn-geojson" onclick="exportGeoJSON()" disabled>↓ GeoJSON</button>
+        <button class="topbar-btn" id="btn-imuhf"   onclick="exportImuHf()"   disabled>↓ IMU 100Hz</button>
+        <button class="topbar-btn" id="btn-replay"  onclick="toggleReplay()"  disabled>▶ Replay</button>
+      </div>
+    </div>
+
+    <!-- Map -->
+    <div class="map-wrap">
+      <div id="map"></div>
+
+      <!-- Replay bar -->
+      <div class="replay-bar" id="replay-bar">
+        <button class="replay-play-btn" id="replay-play-btn" onclick="replayPlayPause()">▶</button>
+        <input  class="replay-slider" type="range" id="replay-slider" min="0" value="0" oninput="replaySeek(this.value)">
+        <div    class="replay-time"   id="replay-time">0 / 0</div>
+      </div>
+    </div>
+
+  </main>
+</div>
+
+<!-- Socket.IO -->
+<script src="/socket.io.min.js"></script>
+<!-- Auth module -->
+<script src="/auth.js"></script>
+<!-- Dashboard logic -->
+<script src="/app.js"></script>
+</body>
+</html>
