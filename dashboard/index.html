@@ -1,173 +1,859 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="en" data-theme="dark">
 <head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>TRU-TRACK · Dashboard</title>
-<link rel="stylesheet" href="/style.css">
-<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
-<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>TRU-TRACK · Fleet Operations</title>
+  <link rel="stylesheet" href="leaflet.css"/>
+  <style>
+/* ═══════════════════════════════════════ TOKENS ═══ */
+:root {
+  --radius:    10px;
+  --radius-sm: 6px;
+  --mono: 'IBM Plex Mono','Fira Mono','Courier New',monospace;
+  --sans: 'Inter',system-ui,-apple-system,sans-serif;
+  --shadow:    0 4px 16px rgba(0,0,0,.15);
+  --shadow-lg: 0 8px 32px rgba(0,0,0,.22);
+  --trans:     .18s cubic-bezier(.4,0,.2,1);
+  --navbar-h:  48px;
+}
+[data-theme="dark"] {
+  --bg:         #090b0f;
+  --surface:    #111520;
+  --surface2:   #181d2a;
+  --surface3:   #1e2535;
+  --border:     rgba(255,255,255,.07);
+  --border-hi:  rgba(255,255,255,.13);
+  --text:       #dde2ec;
+  --text-dim:   #8b95a8;
+  --text-muted: #4e5668;
+  --accent:     #00d4ff;
+  --accent-dim: rgba(0,212,255,.13);
+  --green:      #00e5a0;
+  --green-dim:  rgba(0,229,160,.13);
+  --amber:      #ffb020;
+  --amber-dim:  rgba(255,176,32,.13);
+  --red:        #ff4757;
+  --red-dim:    rgba(255,71,87,.13);
+  --purple:     #a78bfa;
+  --purple-dim: rgba(167,139,250,.13);
+  --glass:      rgba(13,17,23,.84);
+  --glass-b:    rgba(255,255,255,.09);
+  --map-bg:     #0a0c12;
+  --scrollbar:  rgba(255,255,255,.1);
+}
+[data-theme="light"] {
+  --bg:         #f0f2f7;
+  --surface:    #ffffff;
+  --surface2:   #f5f6fb;
+  --surface3:   #eceef6;
+  --border:     rgba(0,0,0,.08);
+  --border-hi:  rgba(0,0,0,.14);
+  --text:       #1a1d27;
+  --text-dim:   #4a5068;
+  --text-muted: #9098b0;
+  --accent:     #0077bb;
+  --accent-dim: rgba(0,119,187,.11);
+  --green:      #00875a;
+  --green-dim:  rgba(0,135,90,.11);
+  --amber:      #b85c00;
+  --amber-dim:  rgba(184,92,0,.11);
+  --red:        #cc2233;
+  --red-dim:    rgba(204,34,51,.11);
+  --purple:     #6b46c1;
+  --purple-dim: rgba(107,70,193,.11);
+  --glass:      rgba(255,255,255,.90);
+  --glass-b:    rgba(0,0,0,.10);
+  --map-bg:     #dde1ea;
+  --scrollbar:  rgba(0,0,0,.12);
+}
+
+/* ═══════════════════════════════════════ RESET ═══ */
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0;}
+html,body{height:100%;overflow:hidden;}
+body{font-family:var(--sans);font-size:13px;line-height:1.5;
+     background:var(--bg);color:var(--text);
+     -webkit-font-smoothing:antialiased;transition:background var(--trans),color var(--trans);}
+::-webkit-scrollbar{width:4px;height:4px;}
+::-webkit-scrollbar-track{background:transparent;}
+::-webkit-scrollbar-thumb{background:var(--scrollbar);border-radius:99px;}
+button{font-family:var(--sans);cursor:pointer;}
+
+/* ═══════════════════════════════════════ SHELL ═══ */
+.app{display:flex;flex-direction:column;height:100vh;}
+
+/* ── Top navbar ── */
+.navbar{
+  height:var(--navbar-h);flex-shrink:0;
+  background:var(--surface);border-bottom:1px solid var(--border);
+  display:flex;align-items:center;padding:0 16px;gap:0;
+  z-index:200;
+}
+.nav-brand{
+  display:flex;align-items:center;gap:9px;
+  padding-right:20px;border-right:1px solid var(--border);
+  margin-right:8px;
+}
+.nav-logo{
+  width:28px;height:28px;background:var(--accent);border-radius:7px;
+  display:flex;align-items:center;justify-content:center;
+  font-family:var(--mono);font-size:9px;font-weight:700;color:#000;
+  flex-shrink:0;
+}
+.nav-brand-name{font-size:13px;font-weight:700;letter-spacing:.3px;}
+.nav-brand-sub{font-size:9px;color:var(--text-muted);font-family:var(--mono);}
+
+.nav-tabs{display:flex;align-items:center;height:100%;gap:2px;}
+.nav-tab{
+  display:flex;align-items:center;gap:6px;
+  padding:0 14px;height:100%;
+  font-size:12px;font-weight:600;color:var(--text-dim);
+  background:none;border:none;border-bottom:2px solid transparent;
+  cursor:pointer;transition:color var(--trans),border-color var(--trans);
+  white-space:nowrap;
+}
+.nav-tab:hover{color:var(--text);}
+.nav-tab.active{color:var(--accent);border-bottom-color:var(--accent);}
+.nav-tab .tab-icon{font-size:14px;}
+
+.nav-right{
+  margin-left:auto;display:flex;align-items:center;gap:8px;
+}
+.nav-srv-dot{
+  width:7px;height:7px;border-radius:50%;background:var(--text-muted);
+  transition:background .3s;flex-shrink:0;
+}
+.nav-srv-dot.up   {background:var(--green);box-shadow:0 0 5px var(--green);}
+.nav-srv-dot.down {background:var(--red);  box-shadow:0 0 5px var(--red);}
+.nav-srv-dot.stale{background:var(--amber);box-shadow:0 0 5px var(--amber);}
+.nav-srv-label{font-size:10px;font-family:var(--mono);color:var(--text-muted);}
+
+.theme-toggle{
+  width:32px;height:32px;border-radius:var(--radius-sm);
+  background:none;border:1px solid var(--border-hi);
+  color:var(--text-dim);font-size:15px;
+  display:flex;align-items:center;justify-content:center;
+  transition:background var(--trans),color var(--trans);
+}
+.theme-toggle:hover{background:var(--surface2);color:var(--text);}
+
+/* ── Page area ── */
+.pages{flex:1;overflow:hidden;display:flex;flex-direction:column;}
+.page{display:none;flex-direction:column;overflow:hidden;flex:1;}
+.page.active{display:flex;}
+
+/* ═══════════════════════════════════════ COMPONENTS ═══ */
+.ph{display:flex;align-items:center;padding:11px 18px;
+    border-bottom:1px solid var(--border);background:var(--surface);
+    gap:12px;flex-shrink:0;min-height:50px;}
+.ph-title{font-size:14px;font-weight:700;}
+.ph-sub{font-size:10px;color:var(--text-muted);font-family:var(--mono);margin-top:1px;}
+.ph-right{margin-left:auto;display:flex;align-items:center;gap:7px;flex-wrap:wrap;}
+
+.card{background:var(--surface);border:1px solid var(--border);
+      border-radius:var(--radius);overflow:hidden;}
+.card-hd{display:flex;align-items:center;justify-content:space-between;
+         padding:10px 13px 9px;border-bottom:1px solid var(--border);}
+.card-title{font-size:10px;font-weight:700;color:var(--text-dim);
+            text-transform:uppercase;letter-spacing:.7px;}
+.card-body{padding:12px;}
+
+.glass{
+  background:var(--glass);
+  backdrop-filter:blur(18px) saturate(1.5);
+  -webkit-backdrop-filter:blur(18px) saturate(1.5);
+  border:1px solid var(--glass-b);
+  border-radius:var(--radius);
+  box-shadow:var(--shadow-lg);
+}
+
+.btn{display:inline-flex;align-items:center;gap:5px;
+     padding:6px 12px;border-radius:var(--radius-sm);
+     font-size:12px;font-weight:600;border:none;cursor:pointer;
+     transition:opacity var(--trans),background var(--trans);
+     white-space:nowrap;font-family:var(--sans);}
+.btn-primary{background:var(--accent);color:#000;}
+.btn-primary:hover{opacity:.85;}
+.btn-ghost{background:transparent;color:var(--text-dim);border:1px solid var(--border-hi);}
+.btn-ghost:hover{background:var(--surface2);color:var(--text);}
+.btn-sm{padding:4px 9px;font-size:11px;}
+
+.sel{background:var(--surface2);border:1px solid var(--border-hi);
+     border-radius:var(--radius-sm);color:var(--text);
+     font-family:var(--mono);font-size:11px;padding:5px 8px;
+     outline:none;cursor:pointer;transition:border-color var(--trans);}
+.sel:focus{border-color:var(--accent);}
+.sel option{background:var(--surface2);}
+
+.tag{display:inline-flex;align-items:center;gap:3px;
+     padding:2px 7px;border-radius:99px;
+     font-size:10px;font-weight:700;font-family:var(--mono);}
+.tag-green {background:var(--green-dim); color:var(--green);}
+.tag-amber {background:var(--amber-dim); color:var(--amber);}
+.tag-red   {background:var(--red-dim);   color:var(--red);}
+.tag-accent{background:var(--accent-dim);color:var(--accent);}
+.tag-muted {background:var(--surface3);  color:var(--text-dim);}
+.tag-purple{background:var(--purple-dim);color:var(--purple);}
+
+.kv-row{display:flex;justify-content:space-between;align-items:baseline;
+        padding:6px 0;border-bottom:1px solid var(--border);gap:8px;}
+.kv-row:last-child{border-bottom:none;}
+.kv-k{font-size:11px;color:var(--text-muted);flex-shrink:0;}
+.kv-v{font-size:11px;font-family:var(--mono);color:var(--text);text-align:right;}
+.kv-v.green{color:var(--green);}
+.kv-v.amber{color:var(--amber);}
+.kv-v.red  {color:var(--red);}
+
+.pbar{height:3px;background:var(--surface3);border-radius:99px;overflow:hidden;}
+.pbar-fill{height:100%;border-radius:99px;background:var(--accent);transition:width .6s ease;}
+.pbar-fill.green{background:var(--green);}
+.pbar-fill.amber{background:var(--amber);}
+.pbar-fill.red  {background:var(--red);}
+.pbar-fill.purple{background:var(--purple);}
+
+.sdot{width:7px;height:7px;border-radius:50%;background:var(--text-muted);flex-shrink:0;}
+.sdot.live   {background:var(--green);box-shadow:0 0 5px var(--green);}
+.sdot.stale  {background:var(--amber);box-shadow:0 0 5px var(--amber);}
+.sdot.offline{background:var(--red);}
+
+.badge-live   {display:flex;align-items:center;gap:5px;padding:3px 9px;border-radius:99px;background:var(--green-dim);color:var(--green);font-size:11px;font-family:var(--mono);font-weight:700;}
+.badge-stale  {display:flex;align-items:center;gap:5px;padding:3px 9px;border-radius:99px;background:var(--amber-dim);color:var(--amber);font-size:11px;font-family:var(--mono);font-weight:700;}
+.badge-offline{display:flex;align-items:center;gap:5px;padding:3px 9px;border-radius:99px;background:var(--red-dim);  color:var(--red);  font-size:11px;font-family:var(--mono);font-weight:700;}
+.live-dot{width:5px;height:5px;border-radius:50%;background:currentColor;}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.3}}
+.live-dot.anim{animation:pulse 1.4s infinite;}
+
+.leg-pill{display:flex;align-items:center;gap:5px;font-size:11px;color:var(--text-dim);
+          padding:3px 9px;border-radius:99px;background:var(--surface2);border:1px solid var(--border);}
+.leg-line{width:14px;height:3px;border-radius:99px;}
+
+.togbtn{padding:4px 10px;border-radius:var(--radius-sm);font-size:11px;font-weight:600;
+        cursor:pointer;border:1px solid var(--border-hi);
+        background:var(--surface2);color:var(--text-dim);
+        transition:all var(--trans);font-family:var(--sans);}
+.togbtn.on{background:var(--accent-dim);border-color:var(--accent);color:var(--accent);}
+
+.dtable{width:100%;border-collapse:collapse;}
+.dtable th{font-size:10px;font-weight:700;color:var(--text-muted);
+           text-transform:uppercase;letter-spacing:.6px;
+           padding:8px 12px;text-align:left;border-bottom:1px solid var(--border);
+           background:var(--surface);position:sticky;top:0;z-index:1;}
+.dtable td{padding:9px 12px;font-size:11px;border-bottom:1px solid var(--border);
+           font-family:var(--mono);color:var(--text-dim);transition:background var(--trans);}
+.dtable tr:last-child td{border-bottom:none;}
+.dtable tr.click{cursor:pointer;}
+.dtable tr.click:hover td{background:var(--surface2);color:var(--text);}
+.dtable tr.sel td{background:var(--accent-dim)!important;color:var(--text)!important;}
+.dtable td.hi{color:var(--text);font-weight:600;}
+
+.empty{display:flex;flex-direction:column;align-items:center;justify-content:center;
+       gap:6px;padding:40px;color:var(--text-muted);text-align:center;}
+.empty-icon{font-size:28px;opacity:.4;}
+.empty-label{font-size:13px;font-weight:600;color:var(--text-dim);}
+.divider{height:1px;background:var(--border);margin:8px 0;}
+.scroll{overflow-y:auto;}
+.g2{display:grid;grid-template-columns:1fr 1fr;gap:10px;}
+.g3{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;}
+.g4{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;}
+.mono{font-family:var(--mono);}
+.f10{font-size:10px;}.f11{font-size:11px;}.fw6{font-weight:600;}
+.tc-m{color:var(--text-muted);}
+.tc-a{color:var(--accent);}
+.tc-g{color:var(--green);}
+.tc-r{color:var(--red);}
+.tc-am{color:var(--amber);}
+.mt6{margin-top:6px;}.mt10{margin-top:10px;}
+
+/* ═══════════════════════════════════ LOGIN ═══ */
+#login-overlay{position:fixed;inset:0;z-index:9999;
+  background:var(--bg);display:flex;align-items:center;justify-content:center;}
+.login-box{background:var(--surface);border:1px solid var(--border-hi);
+  border-radius:14px;padding:36px 32px;width:340px;box-shadow:var(--shadow-lg);}
+.login-logo{width:44px;height:44px;background:var(--accent);border-radius:11px;
+  display:flex;align-items:center;justify-content:center;
+  font-family:var(--mono);font-size:12px;font-weight:700;color:#000;margin:0 auto 20px;}
+.login-title{font-size:18px;font-weight:700;text-align:center;margin-bottom:4px;}
+.login-sub{font-size:11px;color:var(--text-muted);text-align:center;
+  margin-bottom:24px;font-family:var(--mono);}
+.login-field{display:flex;flex-direction:column;gap:5px;margin-bottom:13px;}
+.login-label{font-size:11px;font-weight:600;color:var(--text-dim);}
+.login-input{background:var(--surface2);border:1px solid var(--border-hi);
+  border-radius:var(--radius-sm);color:var(--text);font-family:var(--mono);
+  font-size:13px;padding:9px 11px;outline:none;width:100%;
+  transition:border-color var(--trans);}
+.login-input:focus{border-color:var(--accent);}
+.login-btn{width:100%;padding:10px;margin-top:8px;font-size:13px;}
+.login-err{font-size:12px;color:var(--red);text-align:center;
+  margin-top:10px;display:none;}
+
+/* ═══════════════════════════════════ FLEET PAGE ═══ */
+#page-fleet .fleet-body{flex:1;display:grid;
+  grid-template-columns:288px 1fr;overflow:hidden;}
+.fleet-sb{border-right:1px solid var(--border);display:flex;
+  flex-direction:column;overflow:hidden;background:var(--surface);}
+.fleet-sb-hd{padding:9px 13px;border-bottom:1px solid var(--border);
+  display:flex;align-items:center;justify-content:space-between;flex-shrink:0;}
+.dcard{padding:10px 13px;border-bottom:1px solid var(--border);cursor:pointer;
+  display:flex;align-items:center;gap:10px;transition:background var(--trans);}
+.dcard:hover{background:var(--surface2);}
+.dcard.active{background:var(--accent-dim);border-left:2px solid var(--accent);}
+.dcard-icon{width:30px;height:30px;border-radius:7px;background:var(--surface3);
+  border:1px solid var(--border-hi);display:flex;align-items:center;
+  justify-content:center;font-size:14px;flex-shrink:0;}
+.dcard-name{font-size:12px;font-weight:600;color:var(--text);}
+.dcard-meta{font-size:10px;color:var(--text-muted);font-family:var(--mono);
+  margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+.fleet-map-wrap{position:relative;display:flex;flex-direction:column;}
+.fleet-map-bar{padding:7px 12px;border-bottom:1px solid var(--border);
+  display:flex;align-items:center;gap:8px;background:var(--surface);
+  flex-shrink:0;flex-wrap:wrap;}
+#fleet-map{flex:1;background:var(--map-bg);}
+
+/* ═══════════════════════════════════ LIVE PAGE ═══ */
+#page-live{position:relative;}
+#live-map{position:absolute;inset:0;background:var(--map-bg);z-index:0;display:block;}
+
+.live-topbar{position:absolute;top:12px;left:12px;right:12px;z-index:10;
+  display:flex;align-items:center;gap:7px;flex-wrap:wrap;}
+.live-topbar-inner{display:flex;align-items:center;gap:9px;flex:1;
+  padding:7px 12px;}
+
+.live-left{
+  position:absolute;top:64px;left:12px;bottom:80px;
+  width:268px;z-index:10;pointer-events:none;
+  overflow:hidden;
+}
+.live-left-inner{
+  height:100%;overflow-y:auto;overflow-x:hidden;
+  display:flex;flex-direction:column;gap:0;
+  background:var(--glass);
+  backdrop-filter:blur(18px) saturate(1.5);
+  -webkit-backdrop-filter:blur(18px) saturate(1.5);
+  border:1px solid var(--glass-b);
+  border-radius:var(--radius);
+  box-shadow:var(--shadow-lg);
+  pointer-events:auto;
+}
+.live-right{
+  position:absolute;top:64px;right:12px;bottom:80px;
+  width:260px;z-index:10;pointer-events:none;
+  overflow:hidden;
+}
+.live-right-inner{
+  height:100%;overflow-y:auto;overflow-x:hidden;
+  display:flex;flex-direction:column;gap:0;
+  background:var(--glass);
+  backdrop-filter:blur(18px) saturate(1.5);
+  -webkit-backdrop-filter:blur(18px) saturate(1.5);
+  border:1px solid var(--glass-b);
+  border-radius:var(--radius);
+  box-shadow:var(--shadow-lg);
+  pointer-events:auto;
+}
+.live-bottom{position:absolute;bottom:12px;left:294px;right:286px;z-index:10;pointer-events:none;}
+.live-bottom>*{pointer-events:auto;}
+/* Sections inside unified sidebar */
+.lv-section{border-bottom:1px solid var(--border);padding:10px 12px;}
+.lv-section:last-child{border-bottom:none;}
+.lv-section-title{font-size:10px;font-weight:700;color:var(--text-dim);
+  text-transform:uppercase;letter-spacing:.7px;margin-bottom:8px;
+  display:flex;align-items:center;justify-content:space-between;}
+/* Alerts get more vertical space */
+.lv-alerts-body{min-height:80px;max-height:220px;overflow-y:auto;}
+
+.gnss-grid{display:grid;grid-template-columns:1fr 1fr;
+  gap:1px;background:var(--border);border-radius:6px;overflow:hidden;}
+.gnss-cell{padding:7px 9px;background:var(--surface2);display:flex;flex-direction:column;gap:2px;}
+.gnss-k{font-size:9px;color:var(--text-muted);}
+.gnss-v{font-size:13px;font-weight:700;font-family:var(--mono);color:var(--text);}
+
+.att-row{display:grid;grid-template-columns:1fr 1fr 1fr;gap:5px;}
+.att-box{background:var(--surface2);border:1px solid var(--border);
+  border-radius:var(--radius-sm);padding:7px;text-align:center;}
+.att-k{font-size:9px;color:var(--text-muted);margin-bottom:3px;}
+.att-v{font-size:14px;font-weight:700;font-family:var(--mono);color:var(--accent);}
+.att-u{font-size:8px;color:var(--text-muted);}
+
+.hbar-item{display:flex;flex-direction:column;gap:4px;margin-bottom:8px;}
+.hbar-item:last-child{margin-bottom:0;}
+.hbar-hd{display:flex;justify-content:space-between;align-items:center;}
+.hbar-label{font-size:11px;color:var(--text-dim);}
+.hbar-val{font-size:11px;font-family:var(--mono);font-weight:700;}
+
+.const-item{display:grid;grid-template-columns:52px 1fr 22px;
+  align-items:center;gap:6px;margin-bottom:5px;}
+.const-item:last-child{margin-bottom:0;}
+.const-name{font-size:10px;color:var(--text-muted);font-family:var(--mono);}
+.const-val{font-size:10px;font-family:var(--mono);color:var(--text-dim);text-align:right;}
+
+.alert-row{display:flex;align-items:flex-start;gap:8px;padding:8px 10px;
+  border-radius:var(--radius-sm);border:1px solid var(--border);margin-bottom:5px;}
+.alert-row:last-child{margin-bottom:0;}
+.alert-row.error  {border-color:rgba(204,34,51,.25);background:var(--red-dim);}
+.alert-row.warning{border-color:rgba(184,92,0,.25); background:var(--amber-dim);}
+.alert-icon{font-size:13px;flex-shrink:0;margin-top:1px;}
+.alert-code{font-size:11px;font-family:var(--mono);font-weight:700;}
+.alert-msg{font-size:10px;color:var(--text-dim);margin-top:1px;}
+
+.stat-val{font-size:22px;font-weight:700;font-family:var(--mono);
+  line-height:1;color:var(--text);}
+.stat-label{font-size:10px;color:var(--text-muted);margin-top:2px;}
+
+.replay-panel{padding:11px 13px;display:flex;flex-direction:column;gap:7px;}
+.scrubber{-webkit-appearance:none;appearance:none;width:100%;height:4px;
+  background:var(--surface3);border-radius:99px;outline:none;cursor:pointer;}
+.scrubber::-webkit-slider-thumb{-webkit-appearance:none;appearance:none;
+  width:13px;height:13px;border-radius:50%;background:var(--accent);cursor:pointer;
+  box-shadow:0 0 0 3px var(--accent-dim);}
+
+/* ═══════════════════════════════════ SESSIONS PAGE ═══ */
+#page-sessions .sess-body{flex:1;display:grid;
+  grid-template-columns:1fr 348px;overflow:hidden;}
+.sess-left{display:flex;flex-direction:column;overflow:hidden;}
+.sess-right{border-left:1px solid var(--border);display:flex;
+  flex-direction:column;overflow:hidden;background:var(--surface);}
+.sess-toolbar{padding:8px 13px;border-bottom:1px solid var(--border);
+  display:flex;align-items:center;gap:8px;background:var(--surface);flex-shrink:0;}
+.sess-map{height:190px;flex-shrink:0;border-bottom:1px solid var(--border);background:var(--map-bg);}
+#sess-mini-map{height:100%;}
+.sess-detail{overflow-y:auto;flex:1;padding:13px;display:flex;flex-direction:column;gap:9px;}
+
+/* ═══════════════════════════════════ SERVER PAGE ═══ */
+#page-server .srv-body{flex:1;overflow-y:auto;padding:16px;
+  display:flex;flex-direction:column;gap:13px;}
+.srv-metrics{display:grid;grid-template-columns:repeat(4,1fr);gap:11px;}
+.metric-card{background:var(--surface);border:1px solid var(--border);
+  border-radius:var(--radius);padding:13px 15px;display:flex;flex-direction:column;gap:7px;}
+.metric-lbl{font-size:10px;font-weight:700;color:var(--text-muted);
+  text-transform:uppercase;letter-spacing:.6px;}
+.metric-val{font-size:24px;font-weight:700;font-family:var(--mono);
+  line-height:1;color:var(--text);}
+.metric-val .u{font-size:12px;color:var(--text-dim);margin-left:2px;}
+.svc-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:9px;}
+.svc-row{background:var(--surface2);border:1px solid var(--border);
+  border-radius:var(--radius-sm);padding:10px 12px;
+  display:flex;align-items:center;gap:9px;}
+.svc-name{font-size:12px;font-weight:600;color:var(--text);}
+.svc-desc{font-size:10px;color:var(--text-muted);font-family:var(--mono);margin-top:2px;}
+.chart-wrap{height:130px;}
+
+/* ═══════════════════════════════════ LEAFLET ═══ */
+.leaflet-container{font-family:var(--sans)!important;}
+.leaflet-control-attribution{display:none!important;}
+.leaflet-popup-content-wrapper{
+  background:var(--surface2)!important;color:var(--text)!important;
+  border:1px solid var(--border-hi)!important;box-shadow:var(--shadow)!important;
+  border-radius:var(--radius-sm)!important;font-family:var(--mono)!important;font-size:11px!important;}
+.leaflet-popup-tip{background:var(--surface2)!important;}
+.leaflet-bar a{background:var(--surface2)!important;color:var(--text)!important;
+  border-color:var(--border-hi)!important;}
+.leaflet-bar a:hover{background:var(--surface3)!important;}
+
+
+
+.export-menu-item{display:block;width:100%;text-align:left;padding:8px 12px;
+  font-size:12px;font-weight:500;color:var(--text);background:none;border:none;
+  cursor:pointer;font-family:var(--sans);transition:background var(--trans);}
+.export-menu-item:hover{background:var(--surface2);}
+#export-menu.open{display:block!important;}
+
+/* ── Session map expand modal ── */
+.map-modal-overlay{
+  position:fixed;inset:0;z-index:9000;
+  background:rgba(0,0,0,.7);backdrop-filter:blur(4px);
+  display:flex;align-items:center;justify-content:center;
+  opacity:0;pointer-events:none;transition:opacity .2s;
+}
+.map-modal-overlay.open{opacity:1;pointer-events:auto;}
+.map-modal{
+  width:80vw;height:75vh;max-width:1100px;
+  background:var(--surface);border:1px solid var(--border-hi);
+  border-radius:var(--radius);overflow:hidden;
+  display:flex;flex-direction:column;box-shadow:var(--shadow-lg);
+}
+.map-modal-hd{
+  display:flex;align-items:center;justify-content:space-between;
+  padding:10px 14px;border-bottom:1px solid var(--border);flex-shrink:0;
+}
+.map-modal-title{font-size:13px;font-weight:700;}
+#sess-expand-map{flex:1;}
+
+@media(max-width:1100px){
+  .srv-metrics{grid-template-columns:repeat(2,1fr);}
+  .svc-grid{grid-template-columns:repeat(2,1fr);}
+}
+  </style>
 </head>
 <body>
-<div class="app">
 
-  <!-- ── Sidebar ──────────────────────────────────────────────────────────── -->
-  <aside class="sidebar">
-
-    <div class="sidebar-logo">
-      <div class="logo-icon">TT</div>
-      <div class="logo-text">
-        <h1>TRU-TRACK</h1>
-        <p>Navigation Platform</p>
-      </div>
+<!-- LOGIN -->
+<div id="login-overlay">
+  <div class="login-box">
+    <div class="login-logo">TT</div>
+    <div class="login-title">TRU-TRACK</div>
+    <div class="login-sub">TruVibe Technologies · SVNIT Surat</div>
+    <div class="login-field">
+      <label class="login-label">Email</label>
+      <input class="login-input" id="li-email" type="email" value="devaamdalal555@gmail.com" autocomplete="username"/>
     </div>
-
-    <!-- Device + Session -->
-    <div class="s-section">
-      <div class="s-label">Device</div>
-      <select id="device-select" onchange="onDeviceChange(this.value)">
-        <option value="">Loading devices...</option>
-      </select>
-
-      <div class="s-label">Session</div>
-      <select id="session-select" onchange="onSessionChange(this.value)" disabled>
-        <option value="">Select a device first</option>
-      </select>
+    <div class="login-field">
+      <label class="login-label">Password</label>
+      <input class="login-input" id="li-pass" type="password" autocomplete="current-password" placeholder="••••••••"/>
     </div>
-
-    <!-- Health -->
-    <div class="s-section">
-      <div class="s-label">Health</div>
-
-      <div class="health-item">
-        <div class="health-row">
-          <span class="health-name">GNSS Quality</span>
-          <span class="health-val" id="h-gnss-val">—</span>
-        </div>
-        <div class="health-bar-track">
-          <div class="health-bar-fill" id="h-gnss-bar"></div>
-        </div>
-        <div class="health-sub" id="h-gnss-sub">No device selected</div>
-      </div>
-
-      <div class="health-item">
-        <div class="health-row">
-          <span class="health-name">4G Signal</span>
-          <span class="health-val" id="h-wifi-val">—</span>
-        </div>
-        <div class="health-bar-track">
-          <div class="health-bar-fill" id="h-wifi-bar"></div>
-        </div>
-        <div class="health-sub" id="h-wifi-sub">Pending</div>
-      </div>
-
-      <div class="health-item">
-        <div class="health-row">
-          <span class="health-name">ESKF Filter</span>
-          <span class="health-val" id="h-eskf-val">—</span>
-        </div>
-        <div class="health-bar-track">
-          <div class="health-bar-fill" id="h-eskf-bar"></div>
-        </div>
-        <div class="health-sub" id="h-eskf-sub">Pending</div>
-      </div>
-
-      <div class="health-item">
-        <div class="health-row">
-          <span class="health-name">Battery</span>
-          <span class="health-val" id="h-batt-val">—</span>
-        </div>
-        <div class="health-bar-track">
-          <div class="health-bar-fill" id="h-batt-bar"></div>
-        </div>
-        <div class="health-sub" id="h-batt-sub">N/A — IC pending</div>
-      </div>
-    </div>
-
-    <!-- Alerts -->
-    <div class="s-section">
-      <div class="s-label">Alerts</div>
-      <div class="alert-list" id="alert-list">
-        <div class="no-alerts">No device selected</div>
-      </div>
-    </div>
-
-    <div class="s-section" id="trip-section" style="display:none">
-      <div class="s-label">Trip Report</div>
-      <div class="srv-row"><span class="srv-key">Distance</span><span class="srv-val" id="trip-dist">—</span></div>
-      <div class="srv-row"><span class="srv-key">Duration</span><span class="srv-val" id="trip-dur">—</span></div>
-      <div class="srv-row"><span class="srv-key">Max Speed</span><span class="srv-val" id="trip-max">—</span></div>
-      <div class="srv-row"><span class="srv-key">Avg Speed</span><span class="srv-val" id="trip-avg">—</span></div>
-      <div class="srv-row"><span class="srv-key">Stops</span><span class="srv-val" id="trip-stops">—</span></div>
-      <div class="srv-row"><span class="srv-key">GNSS-Deny</span><span class="srv-val" id="trip-deny">—</span></div>
-    </div>
-	<!-- Server Status -->
-	    <div class="s-section">
-	      <div class="s-label">Server</div>
-	      <div class="srv-chip" id="srv-chip">
-	        <div class="srv-dot" id="srv-dot"></div>
-	        <span id="srv-label">Checking...</span>
-	      </div>
-	      <div class="srv-row"><span class="srv-key">CPU</span><span class="srv-val" id="srv-cpu">—</span></div>
-	      <div class="srv-row"><span class="srv-key">RAM</span><span class="srv-val" id="srv-ram">—</span></div>
-	      <div class="srv-row"><span class="srv-key">Disk</span><span class="srv-val" id="srv-disk">—</span></div>
-	      <div class="srv-row"><span class="srv-key">Services</span><span class="srv-val" id="srv-svcs">—</span></div>
-	    </div>
-
-    <!-- User footer -->
-    <div class="sidebar-footer">
-      <div class="user-info">
-        <div class="user-name" id="user-name">—</div>
-        <div class="user-role" id="user-role">—</div>
-      </div>
-      <a href="/fleet" class="logout-btn" style="display:block;text-align:center;text-decoration:none;margin-bottom:6px;background:rgba(0,242,254,0.08);border:1px solid rgba(0,242,254,0.2);color:#00f2fe">🗺 Fleet Map</a>
-      <button class="logout-btn" onclick="AUTH.logout()">Logout</button>
-    </div>
-
-  </aside>
-
-  <!-- ── Main ──────────────────────────────────────────────────────────────── -->
-  <main class="main">
-
-    <!-- Top bar -->
-    <div class="topbar">
-      <div class="topbar-left">
-        <div class="status-chip">
-          <div class="status-dot offline" id="conn-dot"></div>
-          <span id="conn-label">Not connected</span>
-        </div>
-        <div class="stale-badge" id="stale-badge">⚠ STALE DATA</div>
-        <div class="pkt-counter" id="pkt-counter"></div>
-      </div>
-      <div class="topbar-right">
-        <div class="session-info" id="session-info">No session selected</div>
-        <button class="topbar-btn" id="btn-csv"     onclick="exportCSV()"     disabled>↓ CSV</button>
-        <button class="topbar-btn" id="btn-geojson" onclick="exportGeoJSON()" disabled>↓ GeoJSON</button>
-        <button class="topbar-btn" id="btn-imuhf"   onclick="exportImuHf()"   disabled>↓ IMU 100Hz</button>
-        <button class="topbar-btn" id="btn-replay"  onclick="toggleReplay()"  disabled>▶ Replay</button>
-      </div>
-    </div>
-
-    <!-- Map -->
-    <div class="map-wrap">
-      <div id="map"></div>
-
-      <!-- Replay bar -->
-      <div class="replay-bar" id="replay-bar">
-        <button class="replay-play-btn" id="replay-play-btn" onclick="replayPlayPause()">▶</button>
-        <input  class="replay-slider" type="range" id="replay-slider" min="0" value="0" oninput="replaySeek(this.value)">
-        <div    class="replay-time"   id="replay-time">0 / 0</div>
-      </div>
-    </div>
-
-  </main>
+    <button class="btn btn-primary login-btn" onclick="AUTH.login()">Sign in</button>
+    <div class="login-err" id="li-err">Invalid credentials — try again</div>
+  </div>
 </div>
 
-<!-- Socket.IO -->
-<script src="https://cdn.socket.io/4.7.2/socket.io.min.js"></script>
-<!-- Auth module -->
-<script src="/auth.js"></script>
-<!-- Dashboard logic -->
-<script src="/app.js"></script>
+<!-- APP -->
+<div class="app" id="app" style="display:none;">
+
+  <!-- TOP NAVBAR -->
+  <nav class="navbar">
+    <div class="nav-brand">
+      <div class="nav-logo">TT</div>
+      <div>
+        <div class="nav-brand-name">TRU-TRACK</div>
+        <div class="nav-brand-sub">TruVibe Technologies</div>
+      </div>
+    </div>
+
+    <div class="nav-tabs">
+      <button class="nav-tab active" id="ntab-fleet" onclick="showPage('fleet',this)">
+        <span class="tab-icon">🗺</span> Fleet
+      </button>
+      <button class="nav-tab" id="ntab-live" onclick="showPage('live',this)">
+        <span class="tab-icon">📡</span> Live Tracking
+      </button>
+      <button class="nav-tab" id="ntab-sessions" onclick="showPage('sessions',this)">
+        <span class="tab-icon">📋</span> Sessions
+      </button>
+      <button class="nav-tab" id="ntab-server" onclick="showPage('server',this)">
+        <span class="tab-icon">🖥</span> Server
+      </button>
+    </div>
+
+    <div class="nav-right">
+      <div class="nav-srv-dot" id="nav-srv-dot"></div>
+      <span class="nav-srv-label" id="nav-srv-label">—</span>
+      <button class="theme-toggle" id="theme-btn" onclick="toggleTheme()">🌙</button>
+    </div>
+  </nav>
+
+  <!-- PAGES -->
+  <div class="pages">
+
+    <!-- ═══ FLEET ═══ -->
+    <div class="page active" id="page-fleet">
+      <div class="ph">
+        <div><div class="ph-title">Fleet View</div>
+             <div class="ph-sub">All devices · real-time positions</div></div>
+        <div class="ph-right">
+          <span class="tag tag-accent" id="fleet-count">— devices</span>
+          <select class="sel" id="fleet-layer-sel" onchange="FLEET.switchLayer(this.value)">
+            <option value="carto-dark">Dark (Carto)</option>
+            <option value="carto-light">Light (Carto)</option>
+            <option value="osm" selected>OpenStreetMap</option>
+            <option value="topo">Topo</option>
+          </select>
+          <button class="btn btn-ghost btn-sm" onclick="FLEET.refresh()">↻ Refresh</button>
+        </div>
+      </div>
+      <div class="fleet-body">
+        <div class="fleet-sb">
+          <div class="fleet-sb-hd">
+            <span class="f10 fw6 tc-m" style="text-transform:uppercase;letter-spacing:.6px;">Devices</span>
+          </div>
+          <div class="scroll" id="fleet-device-list" style="flex:1;">
+            <div class="empty"><div class="empty-icon">📡</div><div class="empty-label">Loading…</div></div>
+          </div>
+        </div>
+        <div class="fleet-map-wrap">
+          <div class="fleet-map-bar">
+            <div class="leg-pill"><div class="leg-line" style="background:var(--red)"></div>GNSS</div>
+            <div class="leg-pill"><div class="leg-line" style="background:var(--accent)"></div>ESKF</div>
+            <select class="sel" id="fleet-sess-sel" onchange="FLEET.onSessionChange()" style="min-width:180px;">
+              <option value="">— select device first —</option>
+            </select>
+            <span style="margin-left:auto;display:flex;gap:6px;">
+              <button class="togbtn on" id="btn-follow" onclick="FLEET.toggleFollow()">Follow</button>
+              <button class="togbtn" id="btn-pause"  onclick="FLEET.togglePause()">Pause</button>
+            </span>
+          </div>
+          <div id="fleet-map"></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ═══ LIVE ═══ -->
+    <div class="page" id="page-live">
+      <div id="live-map"></div>
+
+      <div class="live-topbar">
+        <div class="glass live-topbar-inner">
+          <span class="f11 fw6 tc-m">Device</span>
+          <select class="sel" id="live-dev-sel" onchange="LIVE.onDeviceChange(this.value)" style="min-width:170px;"></select>
+          <span class="f11 fw6 tc-m">Session</span>
+          <select class="sel" id="live-sess-sel" onchange="LIVE.onSessionChange()" style="min-width:190px;"></select>
+          <div class="leg-pill"><div class="leg-line" style="background:var(--red)"></div>GNSS</div>
+          <div class="leg-pill"><div class="leg-line" style="background:var(--accent)"></div>ESKF</div>
+          <button class="togbtn on" id="live-gnss-tog" onclick="LIVE.toggleLayer('gnss')">GNSS</button>
+          <button class="togbtn on" id="live-eskf-tog" onclick="LIVE.toggleLayer('eskf')">ESKF</button>
+        </div>
+        <div id="live-badge" class="badge-offline glass" style="padding:5px 11px;">
+          <div class="live-dot"></div>NO DATA
+        </div>
+        <select class="sel glass" id="live-layer-sel" onchange="LIVE.switchLayer(this.value)">
+          <option value="carto-dark">Dark</option>
+          <option value="carto-light">Light</option>
+          <option value="osm" selected>OSM</option>
+          <option value="topo">Topo</option>
+        </select>
+        <button class="btn btn-ghost glass btn-sm" onclick="LIVE.fitBounds()">⊞ Fit</button>
+        <div style="position:relative;display:inline-block;" id="export-dropdown-wrap">
+          <button class="btn btn-ghost glass btn-sm" onclick="document.getElementById('export-menu').classList.toggle('open')" id="export-menu-btn">⬇ Export ▾</button>
+          <div id="export-menu" style="display:none;position:fixed;right:16px;top:58px;z-index:9000;background:var(--surface);border:1px solid var(--border-hi);border-radius:var(--radius-sm);box-shadow:var(--shadow-lg);min-width:180px;overflow:hidden;">
+            <div style="padding:5px 10px;font-size:10px;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:.5px;border-bottom:1px solid var(--border);">Standard (5 Hz)</div>
+            <button class="export-menu-item" onclick="LIVE.exportCSV();this.closest('#export-menu').classList.remove('open')">⬇ CSV</button>
+            <button class="export-menu-item" onclick="LIVE.exportGeoJSON();this.closest('#export-menu').classList.remove('open')">⬇ GeoJSON</button>
+            <div style="padding:5px 10px;font-size:10px;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:.5px;border-top:1px solid var(--border);border-bottom:1px solid var(--border);">HF IMU (100 Hz)</div>
+            <button class="export-menu-item" onclick="LIVE.exportHF();this.closest('#export-menu').classList.remove('open')">⬇ HF IMU CSV</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- LEFT SIDEBAR (unified) -->
+      <div class="live-left">
+        <div class="live-left-inner">
+          <!-- GNSS -->
+          <div class="lv-section">
+            <div class="lv-section-title">GNSS <span class="tag tag-muted" id="lv-fix-tag">—</span></div>
+            <div class="gnss-grid">
+              <div class="gnss-cell"><div class="gnss-k">Latitude</div><div class="gnss-v" id="lv-lat">—</div></div>
+              <div class="gnss-cell"><div class="gnss-k">Longitude</div><div class="gnss-v" id="lv-lon">—</div></div>
+              <div class="gnss-cell"><div class="gnss-k">Speed km/h</div><div class="gnss-v" id="lv-spd">—</div></div>
+              <div class="gnss-cell"><div class="gnss-k">Course °</div><div class="gnss-v" id="lv-course">—</div></div>
+              <div class="gnss-cell"><div class="gnss-k">Altitude m</div><div class="gnss-v" id="lv-alt">—</div></div>
+              <div class="gnss-cell"><div class="gnss-k">HDOP</div><div class="gnss-v" id="lv-hdop">—</div></div>
+            </div>
+            <div class="mt6 f10 tc-m">Age: <span class="mono" id="lv-age">—</span></div>
+          </div>
+          <!-- ESKF -->
+          <div class="lv-section">
+            <div class="lv-section-title">ESKF Attitude <span class="tag" id="lv-eskf-tag">—</span></div>
+            <div class="att-row">
+              <div class="att-box"><div class="att-k">Roll</div><div class="att-v" id="lv-roll">—</div><div class="att-u">deg</div></div>
+              <div class="att-box"><div class="att-k">Pitch</div><div class="att-v" id="lv-pitch">—</div><div class="att-u">deg</div></div>
+              <div class="att-box"><div class="att-k">Yaw</div><div class="att-v" id="lv-yaw">—</div><div class="att-u">deg</div></div>
+            </div>
+            <div class="mt6">
+              <div class="kv-row"><span class="kv-k">vE / vN / vU</span><span class="kv-v mono" id="lv-vel">—</span></div>
+              <div class="kv-row"><span class="kv-k">Yaw init</span><span class="kv-v" id="lv-yaw-init">—</span></div>
+              <div class="kv-row"><span class="kv-k">Pos gated</span><span class="kv-v" id="lv-gated">—</span></div>
+            </div>
+          </div>
+          <!-- Constellations -->
+          <div class="lv-section">
+            <div class="lv-section-title">Constellations <span class="f10 mono tc-m" id="lv-sats-total">—</span></div>
+            <div class="const-item"><span class="const-name">GPS</span><div class="pbar" style="flex:1;"><div class="pbar-fill green" id="cb-gps" style="width:0%"></div></div><span class="const-val" id="cv-gps">—</span></div>
+            <div class="const-item"><span class="const-name">GLONASS</span><div class="pbar" style="flex:1;"><div class="pbar-fill" id="cb-glo" style="width:0%"></div></div><span class="const-val" id="cv-glo">—</span></div>
+            <div class="const-item"><span class="const-name">BeiDou</span><div class="pbar" style="flex:1;"><div class="pbar-fill" id="cb-bds" style="width:0%"></div></div><span class="const-val" id="cv-bds">—</span></div>
+            <div class="const-item"><span class="const-name">Galileo</span><div class="pbar" style="flex:1;"><div class="pbar-fill" id="cb-gal" style="width:0%"></div></div><span class="const-val" id="cv-gal">—</span></div>
+            <div class="const-item"><span class="const-name">NavIC</span><div class="pbar" style="flex:1;"><div class="pbar-fill purple" id="cb-irnss" style="width:0%"></div></div><span class="const-val" id="cv-irnss">—</span></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- RIGHT SIDEBAR (unified) -->
+      <div class="live-right">
+        <div class="live-right-inner">
+          <!-- Signal Health -->
+          <div class="lv-section">
+            <div class="lv-section-title">Signal Health</div>
+            <div class="hbar-item"><div class="hbar-hd"><span class="hbar-label">GNSS Quality</span><span class="hbar-val" id="hv-gnss">—</span></div><div class="pbar"><div class="pbar-fill green" id="hb-gnss" style="width:0%"></div></div></div>
+            <div class="hbar-item"><div class="hbar-hd"><span class="hbar-label">4G LTE</span><span class="hbar-val" id="hv-lte">—</span></div><div class="pbar"><div class="pbar-fill" id="hb-lte" style="width:0%"></div></div></div>
+            <div class="hbar-item"><div class="hbar-hd"><span class="hbar-label">Battery</span><span class="hbar-val" id="hv-bat">—</span></div><div class="pbar"><div class="pbar-fill green" id="hb-bat" style="width:0%"></div></div></div>
+            <div class="divider"></div>
+            <div class="kv-row"><span class="kv-k">LTE RSSI</span><span class="kv-v mono" id="kv-rssi">—</span></div>
+            <div class="kv-row"><span class="kv-k">Net up</span><span class="kv-v" id="kv-net">—</span></div>
+            <div class="kv-row"><span class="kv-k">NTP sync</span><span class="kv-v" id="kv-ntp">—</span></div>
+            <div class="kv-row"><span class="kv-k">Firmware</span><span class="kv-v mono" id="kv-fw">—</span></div>
+            <div class="kv-row"><span class="kv-k">Boot count</span><span class="kv-v mono" id="kv-boot">—</span></div>
+          </div>
+          <!-- Alerts — more space -->
+          <div class="lv-section" style="flex:1;display:flex;flex-direction:column;">
+            <div class="lv-section-title">Alerts <span class="tag tag-muted" id="alert-count">—</span></div>
+            <div class="lv-alerts-body" id="alerts-body">
+              <div class="empty" style="padding:16px;"><div class="empty-icon">✅</div><div class="empty-label">No alerts</div></div>
+            </div>
+          </div>
+
+        </div>
+      </div>
+
+      <!-- BOTTOM REPLAY -->
+      <div class="live-bottom">
+        <div class="glass card">
+          <div class="replay-panel">
+            <div style="display:flex;align-items:center;justify-content:space-between;">
+              <span class="f11 fw6 tc-m">Session Replay</span>
+              <span class="f11 mono tc-m" id="replay-time">—</span>
+            </div>
+            <input type="range" class="scrubber" id="replay-scrub" min="0" max="100" value="0" oninput="LIVE.onScrub(this.value)"/>
+            <div style="display:flex;align-items:center;gap:6px;">
+              <button class="btn btn-ghost btn-sm" onclick="LIVE.replayPlay()">▶ Play</button>
+              <button class="btn btn-ghost btn-sm" onclick="LIVE.replayPause()">⏸ Pause</button>
+              <button class="btn btn-ghost btn-sm" onclick="LIVE.replayReset()">⏮ Reset</button>
+              <span class="f11 tc-m" style="margin-left:4px;">Speed</span>
+              <select class="sel" id="replay-speed" style="font-size:11px;padding:3px 7px;">
+                <option value="1">1×</option><option value="2">2×</option>
+                <option value="5">5×</option><option value="10">10×</option>
+              </select>
+              <span class="f11 mono tc-m" style="margin-left:auto;" id="replay-pts">—</span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div><!-- /live -->
+
+    <!-- ═══ SESSIONS ═══ -->
+    <div class="page" id="page-sessions">
+      <div class="ph">
+        <div><div class="ph-title">Sessions</div>
+             <div class="ph-sub">All recorded trips</div></div>
+        <div class="ph-right">
+          <select class="sel" id="sess-dev-sel" onchange="SESSIONS.load(this.value)" style="min-width:180px;">
+            <option value="">— Select device —</option>
+          </select>
+          <button class="btn btn-ghost btn-sm" onclick="SESSIONS.load(document.getElementById('sess-dev-sel').value)">↻</button>
+        </div>
+      </div>
+      <div class="sess-body">
+        <div class="sess-left">
+          <div class="sess-toolbar">
+            <span class="f11 tc-m" id="sess-count-label">Select a device above</span>
+          </div>
+          <div class="scroll" style="flex:1;">
+            <table class="dtable">
+              <thead><tr><th>#</th><th>Label</th><th>Started</th><th>Duration</th><th>Packets</th><th>Boot</th><th>FW</th><th>Export</th></tr></thead>
+              <tbody id="sess-tbody"><tr><td colspan="8" style="text-align:center;padding:28px;color:var(--text-muted);">Select a device</td></tr></tbody>
+            </table>
+          </div>
+        </div>
+        <div class="sess-right">
+          <div class="card-hd">
+            <span class="card-title">Session Detail</span>
+            <span class="tag tag-muted" id="sess-detail-id">—</span>
+          </div>
+          <div class="sess-map" style="position:relative;">
+            <div id="sess-mini-map"></div>
+            <button onclick="SESSIONS.expandMap()" style="position:absolute;top:7px;right:7px;z-index:500;padding:4px 8px;font-size:11px;font-weight:600;background:var(--glass);backdrop-filter:blur(8px);border:1px solid var(--glass-b);border-radius:var(--radius-sm);cursor:pointer;color:var(--text);">⤢ Expand</button>
+          </div>
+          <div class="sess-detail">
+            <div class="g2">
+              <div class="card" style="padding:11px;"><div class="stat-val tc-a" id="sd-dist">—</div><div class="stat-label">Distance (km)</div></div>
+              <div class="card" style="padding:11px;"><div class="stat-val tc-a" id="sd-dur">—</div><div class="stat-label">Duration</div></div>
+            </div>
+            <div class="card">
+              <div class="card-body" style="padding:11px;">
+                <div class="kv-row"><span class="kv-k">Session ID</span><span class="kv-v mono" id="sd-sid" style="font-size:9px;word-break:break-all;"></span></div>
+                <div class="kv-row"><span class="kv-k">Start</span><span class="kv-v mono" id="sd-start">—</span></div>
+                <div class="kv-row"><span class="kv-k">End</span><span class="kv-v mono" id="sd-end">—</span></div>
+                <div class="kv-row"><span class="kv-k">Packets</span><span class="kv-v mono" id="sd-packets">—</span></div>
+                <div class="kv-row"><span class="kv-k">Boot count</span><span class="kv-v mono" id="sd-boot">—</span></div>
+                <div class="kv-row"><span class="kv-k">Firmware</span><span class="kv-v mono" id="sd-fw">—</span></div>
+                <div class="kv-row"><span class="kv-k">Max speed</span><span class="kv-v mono" id="sd-maxspd">—</span></div>
+                <div class="kv-row"><span class="kv-k">Stops</span><span class="kv-v mono" id="sd-stops">—</span></div>
+              </div>
+            </div>
+            <div class="f10 tc-m" style="margin-bottom:3px;font-weight:600;text-transform:uppercase;letter-spacing:.5px;">Standard (5 Hz)</div>
+            <button class="btn btn-primary" style="width:100%;justify-content:center;" onclick="SESSIONS.exportCSV()">⬇ Download CSV</button>
+            <button class="btn btn-ghost"   style="width:100%;justify-content:center;" onclick="SESSIONS.exportGeoJSON()">⬇ Download GeoJSON</button>
+            <div class="f10 tc-m" style="margin-top:4px;margin-bottom:3px;font-weight:600;text-transform:uppercase;letter-spacing:.5px;">High-Frequency IMU (100 Hz)</div>
+            <button class="btn btn-ghost"   style="width:100%;justify-content:center;" onclick="SESSIONS.exportHF()">⬇ HF IMU CSV</button>
+            <div class="divider"></div>
+            <button class="btn btn-ghost"   style="width:100%;justify-content:center;" onclick="SESSIONS.openInLive()">📡 View in Live Tracking</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ═══ SERVER ═══ -->
+    <div class="page" id="page-server">
+      <div class="ph">
+        <div><div class="ph-title">Server Health</div>
+             <div class="ph-sub" id="srv-last-upd">Last updated: —</div></div>
+        <div class="ph-right">
+          <button class="btn btn-ghost btn-sm" onclick="SERVER.fetch()">↻ Refresh</button>
+          <span id="srv-uptime-badge" class="badge-offline"><div class="live-dot anim"></div>—</span>
+        </div>
+      </div>
+      <div class="srv-body">
+        <div class="srv-metrics">
+          <div class="metric-card"><div class="metric-lbl">CPU Usage</div><div class="metric-val" id="srv-cpu">—<span class="u">%</span></div><div class="pbar"><div class="pbar-fill" id="srv-cpu-bar" style="width:0%"></div></div></div>
+          <div class="metric-card"><div class="metric-lbl">Memory</div><div class="metric-val" id="srv-mem">—<span class="u">%</span></div><div class="pbar"><div class="pbar-fill green" id="srv-mem-bar" style="width:0%"></div></div><div class="f10 tc-m mono mt6" id="srv-mem-detail">—</div></div>
+          <div class="metric-card"><div class="metric-lbl">Disk</div><div class="metric-val" id="srv-disk">—<span class="u">%</span></div><div class="pbar"><div class="pbar-fill" id="srv-disk-bar" style="width:0%"></div></div></div>
+          <div class="metric-card"><div class="metric-lbl">Network Latency</div><div class="metric-val" id="srv-lat" style="font-size:18px;">—</div><div class="f10 tc-m">ping to 1.1.1.1</div></div>
+        </div>
+        <div class="card"><div class="card-hd"><span class="card-title">Load Average</span></div><div class="card-body"><div class="chart-wrap"><canvas id="srv-chart"></canvas></div></div></div>
+        <div class="g2">
+          <div class="card"><div class="card-hd"><span class="card-title">System</span></div>
+            <div class="card-body">
+              <div class="kv-row"><span class="kv-k">Load 1m</span><span class="kv-v mono" id="srv-l1">—</span></div>
+              <div class="kv-row"><span class="kv-k">Load 5m</span><span class="kv-v mono" id="srv-l5">—</span></div>
+              <div class="kv-row"><span class="kv-k">Load 15m</span><span class="kv-v mono" id="srv-l15">—</span></div>
+              <div class="kv-row"><span class="kv-k">Uptime</span><span class="kv-v mono" id="srv-uptime">—</span></div>
+              <div class="kv-row"><span class="kv-k">Status</span><span class="kv-v" id="srv-status">—</span></div>
+            </div>
+          </div>
+          <div class="card"><div class="card-hd"><span class="card-title">Backend</span></div>
+            <div class="card-body">
+              <div class="kv-row"><span class="kv-k">Host</span><span class="kv-v mono">tru-track.bittest.in</span></div>
+              <div class="kv-row"><span class="kv-k">Backend</span><span class="kv-v mono">:9000</span></div>
+              <div class="kv-row"><span class="kv-k">Tuning</span><span class="kv-v mono">:9001</span></div>
+              <div class="kv-row"><span class="kv-k">MQTT</span><span class="kv-v mono">:1883</span></div>
+              <div class="kv-row"><span class="kv-k">DB</span><span class="kv-v mono">MongoDB · nav</span></div>
+            </div>
+          </div>
+        </div>
+        <div>
+          <div class="f10 fw6 tc-m" style="text-transform:uppercase;letter-spacing:.6px;margin-bottom:9px;">Services</div>
+          <div class="svc-grid">
+            <div class="svc-row"><span class="sdot" id="svc-mongo"></span><div><div class="svc-name">MongoDB</div><div class="svc-desc">nav · gnss_raw · eskf_state</div></div></div>
+            <div class="svc-row"><span class="sdot" id="svc-mqtt"></span><div><div class="svc-name">Mosquitto</div><div class="svc-desc">MQTT broker · :1883</div></div></div>
+            <div class="svc-row"><span class="sdot" id="svc-ingest"></span><div><div class="svc-name">mqtt-ingest</div><div class="svc-desc">Python · MQTT→MongoDB</div></div></div>
+            <div class="svc-row"><span class="sdot" id="svc-nav"></span><div><div class="svc-name">nav-backend</div><div class="svc-desc">Flask · Gunicorn · :9000</div></div></div>
+            <div class="svc-row"><span class="sdot" id="svc-tuning"></span><div><div class="svc-name">Tuning Service</div><div class="svc-desc">ESKF params · :9001</div></div></div>
+            <div class="svc-row"><span class="sdot" id="svc-socket"></span><div><div class="svc-name">Socket.io</div><div class="svc-desc">Live telemetry stream</div></div></div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+  </div><!-- /pages -->
+
+  <!-- Session map expand modal -->
+  <div class="map-modal-overlay" id="sess-map-modal" onclick="SESSIONS.closeMap(event)">
+    <div class="map-modal">
+      <div class="map-modal-hd">
+        <span class="map-modal-title" id="sess-modal-title">Session Track</span>
+        <button class="btn btn-ghost btn-sm" onclick="SESSIONS.closeMap()">✕ Close</button>
+      </div>
+      <div id="sess-expand-map"></div>
+    </div>
+  </div>
+</div><!-- /app -->
+
+<script>
+document.addEventListener('click', e => {
+  const wrap = document.getElementById('export-dropdown-wrap');
+  const menu = document.getElementById('export-menu');
+  if (wrap && menu && !wrap.contains(e.target)) menu.classList.remove('open');
+});
+</script>
+<script src="socket.io.min.js"></script>
+<script src="leaflet.js"></script>
+<script src="chart.umd.min.js"></script>
+<script src="app.js"></script>
 </body>
 </html>
