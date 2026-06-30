@@ -839,3 +839,144 @@ def imu_hf_full():
         mimetype="text/csv",
         headers={"Content-Disposition": f'attachment; filename="{fname}"'},
     )
+# ═════════════════════════════════════════════════════════════════════════════
+# DEVICE PROFILES + REPLAY TELEMETRY — append to END of nav_backend.py
+# Adds: device naming / vehicle linkage (editable anytime) + point-in-time replay
+# Collection: device_profiles  (keyed by device_id)
+# ═════════════════════════════════════════════════════════════════════════════
+
+# ── List all profiles (merged with registry so unregistered devices appear too) ──
+@app.route("/api/device-profiles")
+@app.route("/api/v1/device-profiles")
+@jwt_required(optional=True)
+def device_profiles_list():
+    # All known device_ids from registry + raw collections
+    reg_ids = set(db.device_registry.distinct("device_id"))
+    raw_ids = set(db.gnss_raw.distinct("device_id")) | set(db.eskf_state.distinct("device_id"))
+    all_ids = sorted(x for x in (reg_ids | raw_ids) if x)
+
+    profiles = {p["device_id"]: p for p in db.device_profiles.find({}, {"_id": 0})}
+    reg = {r["device_id"]: r for r in db.device_registry.find(
+        {}, {"_id": 0, "device_id": 1, "fw_version": 1, "last_seen": 1, "total_packets": 1})}
+
+    out = []
+    for did in all_ids:
+        prof = profiles.get(did, {})
+        r = reg.get(did, {})
+        out.append({
+            "device_id":    did,
+            "name":         prof.get("name", ""),
+            "vehicle":      prof.get("vehicle", ""),
+            "vehicle_type": prof.get("vehicle_type", ""),
+            "plate":        prof.get("plate", ""),
+            "driver":       prof.get("driver", ""),
+            "phone":        prof.get("phone", ""),
+            "phone":        prof.get("phone", ""),
+            "phone":        prof.get("phone", ""),
+            "phone":        prof.get("phone", ""),
+            "notes":        prof.get("notes", ""),
+            "color":        prof.get("color", "#00d4ff"),
+            "registered":   did in profiles,
+            "fw_version":   r.get("fw_version"),
+            "last_seen":    to_ist_iso(r.get("last_seen")) if r.get("last_seen") else None,
+            "total_packets": r.get("total_packets"),
+        })
+    return jsonify(out)
+
+
+# ── Get one profile ──
+@app.route("/api/device-profile/<device_id>")
+@app.route("/api/v1/device-profile/<device_id>")
+@jwt_required(optional=True)
+def device_profile_get(device_id):
+    p = db.device_profiles.find_one({"device_id": device_id}, {"_id": 0})
+    return jsonify(p or {"device_id": device_id})
+
+
+# ── Create / update a profile (upsert — editable anytime) ──
+@app.route("/api/device-profile/<device_id>", methods=["POST", "PUT"])
+@app.route("/api/v1/device-profile/<device_id>", methods=["POST", "PUT"])
+@jwt_required(optional=True)
+def device_profile_save(device_id):
+    data = request.get_json(silent=True) or {}
+    fields = {
+        "device_id":    device_id,
+        "name":         (data.get("name") or "").strip(),
+        "vehicle":      (data.get("vehicle") or "").strip(),
+        "vehicle_type": (data.get("vehicle_type") or "").strip(),
+        "plate":        (data.get("plate") or "").strip(),
+        "driver":       (data.get("driver") or "").strip(),
+        "phone":        (data.get("phone") or "").strip(),
+        "phone":        (data.get("phone") or "").strip(),
+        "phone":        (data.get("phone") or "").strip(),
+        "phone":        (data.get("phone") or "").strip(),
+        "notes":        (data.get("notes") or "").strip(),
+        "color":        (data.get("color") or "#00d4ff").strip(),
+        "updated_at":   datetime.utcnow(),
+    }
+    db.device_profiles.update_one(
+        {"device_id": device_id},
+        {"$set": fields, "$setOnInsert": {"created_at": datetime.utcnow()}},
+        upsert=True,
+    )
+    return jsonify({"ok": True, "device_id": device_id})
+
+
+# ── Delete a profile ──
+@app.route("/api/device-profile/<device_id>", methods=["DELETE"])
+@app.route("/api/v1/device-profile/<device_id>", methods=["DELETE"])
+@jwt_required(optional=True)
+def device_profile_delete(device_id):
+    db.device_profiles.delete_one({"device_id": device_id})
+    return jsonify({"ok": True})
+
+
+# ── Point-in-time telemetry for replay (constellations/health from history) ──
+@app.route("/api/telemetry/at/<device_id>")
+@app.route("/api/v1/telemetry/at/<device_id>")
+@jwt_required(optional=True)
+def telemetry_point_in_time(device_id):
+    t_str = request.args.get("t")
+    session_id = request.args.get("session_id")
+    if not t_str:
+        return jsonify({"error": "t required"}), 400
+    try:
+        t = parse_iso(t_str)
+    except Exception:
+        return jsonify({"error": "invalid t"}), 400
+
+    q = {"device_id": device_id, "t_server": {"$lte": t}}
+    if session_id:
+        q["session_id"] = session_id
+
+    gnss = db.gnss_raw.find_one(q, {"_id": 0}, sort=[("t_server", -1)]) or {}
+    eskf = db.eskf_state.find_one(q, {"_id": 0}, sort=[("t_server", -1)]) or {}
+
+    # status may live on eskf_state or gnss_raw depending on schema
+    status = eskf.get("status") or gnss.get("status") or {}
+
+    for d in (gnss, eskf):
+        ts = d.get("t_server")
+        if isinstance(ts, datetime):
+            d["t_server"] = ts.isoformat()
+
+    return jsonify({"gnss": gnss, "eskf": eskf, "status": status})
+
+@app.route("/api/alerts/at/<device_id>")
+@app.route("/api/v1/alerts/at/<device_id>")
+@jwt_required(optional=True)
+def alerts_at(device_id):
+    t_str = request.args.get("t")
+    session_id = request.args.get("session_id")
+    if not t_str: return jsonify([])
+    try: t = parse_iso(t_str)
+    except: return jsonify([])
+    q = {"device_id": device_id, "t_server": {"$lte": t}}
+    if session_id: q["session_id"] = session_id
+    g = db.gnss_raw.find_one(q, {"_id":0}, sort=[("t_server",-1)]) or {}
+    out = []
+    if not g.get("fix_valid"):
+        out.append({"level":"error","code":"GNSS_NO_FIX","msg":"No GNSS fix"})
+    elif (g.get("sats") or 0) < 4:
+        out.append({"level":"warning","code":"GNSS_FEW_SATS","msg":f"Only {g.get('sats',0)} satellites"})
+    return jsonify(out)

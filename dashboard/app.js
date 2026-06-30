@@ -164,6 +164,8 @@ function showPage(id, btn) {
     setTimeout(() => SESSIONS._miniMap && SESSIONS._miniMap.invalidateSize(), 80);
   }
   if (id === 'server') SERVER.fetch();
+  if (id === 'register') REGISTER.load();
+  if (id === 'register') REGISTER.load();
 }
 
 /* ═══════════════════════════════════════════════════════════════
@@ -566,12 +568,11 @@ const LIVE = {
     this._sessionId = document.getElementById('live-sess-sel').value;
 
     if (this._sessionId) {
-      // Historic session — stop live poll and remove live marker
       clearInterval(this._pollTimer);
       this._pollTimer = null;
       if (this._curMarker) { this._map && this._map.removeLayer(this._curMarker); this._curMarker = null; }
+      // historic alerts loaded per-point during scrub via _applySidebarFromPoint
     } else {
-      // Back to live — restart poll
       this._trackLoaded = false; this._lastFullFetch = -99;
       this._startPoll();
     }
@@ -592,7 +593,7 @@ const LIVE = {
       await this._loadAlerts();
     } else {
       // Historic session
-      await Promise.all([this._loadTrack(), this._loadAlerts()]);
+      await this._loadTrack();  // alerts skipped — not available for historic replay
     }
   },
 
@@ -955,14 +956,30 @@ const LIVE = {
             const gnssQ = U.gnssQualityPct(g.sats ?? 0, g.hdop);
             U.setText('hv-gnss', gnssQ + '%');
             U.barPct('hb-gnss', gnssQ, U.gnssClass(gnssQ));
-            const s = doc.status || {};
-            const rssi = s.lte_rssi_dbm ?? null;
-            U.setText('hv-lte', rssi != null ? rssi + ' dBm' : '—');
-            U.barPct('hb-lte', U.rssiToPercent(rssi), U.lteClass(rssi));
-            const batPct = s.battery_pct ?? null;
-            U.setText('hv-bat', batPct != null ? batPct + '%' : '—');
-            U.barPct('hb-bat', batPct ?? 0, U.batClass(batPct ?? 0));
-            U.setText('kv-rssi', rssi != null ? rssi + ' dBm' : '—');
+            // LTE/Battery are not recorded historically (only live device_latest has them)
+            U.setText('hv-lte', 'Not recorded');
+            U.barPct('hb-lte', 0, '');
+            U.setText('hv-bat', 'Not recorded');
+            U.barPct('hb-bat', 0, '');
+            U.setText('kv-rssi', 'Not recorded');
+          }).catch(() => {});
+        // Historic alerts at this timestamp
+        AUTH.apiJSON(`/api/alerts/at/${encodeURIComponent(this._deviceId)}?t=${t}${sid}`)
+          .then(alerts => {
+            const body = document.getElementById('alerts-body');
+            const tag  = document.getElementById('alert-count');
+            if (!alerts.length) {
+              body.innerHTML = '<div class="empty" style="padding:16px;"><div class="empty-icon">\u2705</div><div class="empty-label">No alerts</div></div>';
+              tag.textContent = '0'; tag.className = 'tag tag-muted';
+            } else {
+              tag.textContent = alerts.length;
+              tag.className = alerts.some(a=>a.level==='error') ? 'tag tag-red' : 'tag tag-amber';
+              body.innerHTML = alerts.map(a => `
+                <div class="alert-row ${a.level}">
+                  <div class="alert-icon">${a.level==='error'?'\ud83d\udd34':'\ud83d\udfe1'}</div>
+                  <div class="alert-content"><div class="alert-code">${a.code}</div><div class="alert-msg">${a.msg}</div></div>
+                </div>`).join('');
+            }
           }).catch(() => {});
       }
     } catch(e) { /* never crash the scrubber */ }
@@ -1308,3 +1325,110 @@ window.addEventListener('load', async () => {
   } catch(e) {}
   bootApp();
 });
+
+/* ═══════════════════════════════════════════════════════════════
+   DEVICE REGISTRATION MODULE
+═══════════════════════════════════════════════════════════════ */
+const REGISTER = {
+  _devices: [],
+  _selected: null,
+
+  async load() {
+    try {
+      const list = await AUTH.apiJSON('/api/v1/device-profiles');
+      this._devices = list;
+      this._renderTable(list);
+    } catch(e) { console.error('register load', e); }
+  },
+
+  _renderTable(list) {
+    const tb = document.getElementById('reg-tbody');
+    if (!list.length) {
+      tb.innerHTML = '<tr><td colspan="7" style="text-align:center;padding:28px;color:var(--text-muted);">No devices found</td></tr>';
+      return;
+    }
+    tb.innerHTML = '';
+    list.forEach(d => {
+      const tr = document.createElement('tr');
+      tr.className = 'clickable';
+      tr.innerHTML = `
+        <td class="hi">${d.device_id}</td>
+        <td>${d.name || '<span style="color:var(--text-muted)">—</span>'}</td>
+        <td>${d.vehicle || '—'}</td>
+        <td>${d.plate || '—'}</td>
+        <td>${d.driver || '—'}</td>
+        <td>${d.registered ? '<span class="tag tag-green">Registered</span>' : '<span class="tag tag-muted">Unregistered</span>'}</td>
+        <td><button class="btn btn-ghost btn-sm" onclick="event.stopPropagation();REGISTER.edit('${d.device_id}')">Edit</button></td>`;
+      tr.onclick = () => this.edit(d.device_id);
+      tb.appendChild(tr);
+    });
+  },
+
+  edit(deviceId) {
+    const d = this._devices.find(x => x.device_id === deviceId) || { device_id: deviceId };
+    this._selected = d;
+    document.getElementById('reg-edit-id').textContent = deviceId;
+    document.querySelectorAll('#reg-tbody tr').forEach(r => r.classList.remove('sel'));
+
+    const f = document.getElementById('reg-form');
+    f.innerHTML = `
+      <div class="login-field"><label class="login-label">Device ID (read-only)</label>
+        <input class="login-input" value="${d.device_id}" readonly style="opacity:.6"/></div>
+      <div class="login-field"><label class="login-label">Device Name</label>
+        <input class="login-input" id="rf-name" value="${d.name || ''}" placeholder="e.g. Tracker-01"/></div>
+      <div class="login-field"><label class="login-label">Vehicle</label>
+        <input class="login-input" id="rf-vehicle" value="${d.vehicle || ''}" placeholder="e.g. Maruti Swift"/></div>
+      <div class="login-field"><label class="login-label">Vehicle Type</label>
+        <input class="login-input" id="rf-vtype" value="${d.vehicle_type || ''}" placeholder="car / truck / bike"/></div>
+      <div class="login-field"><label class="login-label">Number Plate</label>
+        <input class="login-input" id="rf-plate" value="${d.plate || ''}" placeholder="GJ-05-XX-0000"/></div>
+      <div class="login-field"><label class="login-label">Driver</label>
+        <input class="login-input" id="rf-driver" value="${d.driver || ''}" placeholder="Driver name"/></div>
+      <div class="login-field"><label class="login-label">Phone Number</label>
+        <input class="login-input" id="rf-phone" value="${d.phone || ''}" placeholder="+91 XXXXX XXXXX"/></div>
+      <div class="login-field"><label class="login-label">Phone Number</label>
+        <input class="login-input" id="rf-phone" value="${d.phone || ''}" placeholder="+91 XXXXX XXXXX"/></div>
+      <div class="login-field"><label class="login-label">Map Track Color</label>
+        <input class="login-input" id="rf-color" type="color" value="${d.color || '#00d4ff'}" style="height:40px;padding:4px"/></div>
+      <div class="login-field"><label class="login-label">Notes</label>
+        <textarea class="login-input" id="rf-notes" rows="3" placeholder="Any notes…">${d.notes || ''}</textarea></div>
+      <button class="btn btn-primary" style="width:100%;justify-content:center;" onclick="REGISTER.save()">💾 Save Profile</button>
+      ${d.registered ? '<button class="btn btn-ghost" style="width:100%;justify-content:center;" onclick="REGISTER.remove()">🗑 Delete Profile</button>' : ''}
+    `;
+  },
+
+  async save() {
+    if (!this._selected) return;
+    const body = {
+      name:         document.getElementById('rf-name').value,
+      vehicle:      document.getElementById('rf-vehicle').value,
+      vehicle_type: document.getElementById('rf-vtype').value,
+      plate:        document.getElementById('rf-plate').value,
+      driver:       document.getElementById('rf-driver').value,
+      phone:        document.getElementById('rf-phone').value,
+      phone:        document.getElementById('rf-phone').value,
+      phone:        document.getElementById('rf-phone').value,
+      phone:        document.getElementById('rf-phone').value,
+      color:        document.getElementById('rf-color').value,
+      notes:        document.getElementById('rf-notes').value,
+    };
+    try {
+      await AUTH.apiFetch(`/api/v1/device-profile/${encodeURIComponent(this._selected.device_id)}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+      await this.load();
+      alert('Profile saved');
+    } catch(e) { alert('Save failed: ' + e.message); }
+  },
+
+  async remove() {
+    if (!this._selected || !confirm('Delete this device profile?')) return;
+    try {
+      await AUTH.apiFetch(`/api/v1/device-profile/${encodeURIComponent(this._selected.device_id)}`, { method: 'DELETE' });
+      await this.load();
+      document.getElementById('reg-form').innerHTML = '<div class="empty"><div class="empty-icon">🚗</div><div class="empty-label">Select a device to edit</div></div>';
+    } catch(e) { alert('Delete failed'); }
+  },
+};

@@ -9,3 +9,6 @@ secrets.env
 tuning/nohup.out
 nohup.out
 nohup.out
+*backup*
+*.bak
+*.bak2

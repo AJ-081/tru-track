@@ -512,6 +512,9 @@ button{font-family:var(--sans);cursor:pointer;}
       <button class="nav-tab" id="ntab-server" onclick="showPage('server',this)">
         <span class="tab-icon">🖥</span> Server
       </button>
+      <button class="nav-tab" id="ntab-register" onclick="showPage('register',this)">
+        <span class="tab-icon">🚗</span> Devices
+      </button>
     </div>
 
     <div class="nav-right">
@@ -802,6 +805,33 @@ button{font-family:var(--sans);cursor:pointer;}
       </div>
     </div>
 
+
+    <!-- ═══ DEVICE REGISTRATION ═══ -->
+    <div class="page" id="page-register">
+      <div class="ph">
+        <div><div class="ph-title">Device Registry</div>
+             <div class="ph-sub">Name devices · link to vehicles · editable anytime</div></div>
+        <div class="ph-right">
+          <button class="btn btn-ghost btn-sm" onclick="REGISTER.load()">↻ Refresh</button>
+        </div>
+      </div>
+      <div style="flex:1;display:grid;grid-template-columns:1fr 380px;overflow:hidden;">
+        <!-- Device list -->
+        <div style="overflow-y:auto;">
+          <table class="dtable" id="reg-table">
+            <thead><tr><th>Device ID</th><th>Name</th><th>Vehicle</th><th>Plate</th><th>Driver</th><th>Status</th><th></th></tr></thead>
+            <tbody id="reg-tbody"><tr><td colspan="7" style="text-align:center;padding:28px;color:var(--text-muted);">Loading…</td></tr></tbody>
+          </table>
+        </div>
+        <!-- Edit panel -->
+        <div style="border-left:1px solid var(--border);background:var(--surface);display:flex;flex-direction:column;overflow:hidden;">
+          <div class="card-hd"><span class="card-title">Device Profile</span><span class="tag tag-muted" id="reg-edit-id">—</span></div>
+          <div style="overflow-y:auto;flex:1;padding:14px;display:flex;flex-direction:column;gap:12px;" id="reg-form">
+            <div class="empty"><div class="empty-icon">🚗</div><div class="empty-label">Select a device to edit</div></div>
+          </div>
+        </div>
+      </div>
+    </div>
   </div><!-- /pages -->
 
   <!-- Session map expand modal -->
