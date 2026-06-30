@@ -761,3 +761,81 @@ def fleet():
     return _fleet()
 if __name__ == "__main__":
     socketio.run(app, host=SERVER_HOST, port=SERVER_PORT, allow_unsafe_werkzeug=True)
+# ─────────────────────────────────────────────────────────────────────────────
+# FULL HF IMU EXPORT — last known-good version (no row limit, streams via temp file)
+# Append this entire block to the END of nav_backend.py
+#
+# Requires gunicorn (Flask dev server cannot handle large/streaming responses):
+#   /opt/tru-track/backend/venv/bin/pip install gunicorn
+#   sudo sed -i 's|ExecStart=.*|ExecStart=/opt/tru-track/backend/venv/bin/gunicorn -w 2 -b 0.0.0.0:9000 nav_backend:app|' /etc/systemd/system/tru-track-backend.service
+#   sudo systemctl daemon-reload
+#   sudo systemctl restart tru-track-backend
+#
+# Route:  GET /api/session/export-imu-hf-full
+#         GET /api/v1/session/export-imu-hf-full
+# Params: device_id (required), session_id (optional)
+# ─────────────────────────────────────────────────────────────────────────────
+
+@app.route("/api/session/export-imu-hf-full")
+@app.route("/api/v1/session/export-imu-hf-full")
+def imu_hf_full():
+    import tempfile, os
+    device_id = request.args.get("device_id")
+    session_id = request.args.get("session_id")
+    if not device_id:
+        return jsonify({"error": "device_id required"}), 400
+
+    q = request_session_filter(device_id)
+
+    fieldnames = [
+        "device_id", "session_id", "fw_version", "t_ms", "t_server_utc",
+        "ax_raw", "ay_raw", "az_raw", "gx_raw", "gy_raw", "gz_raw", "fs", "gs",
+        "accel_mps2_x", "accel_mps2_y", "accel_mps2_z",
+        "gyro_radps_x", "gyro_radps_y", "gyro_radps_z",
+    ]
+
+    tmp = tempfile.NamedTemporaryFile(mode='w', suffix='.csv', delete=False)
+    w = csv.DictWriter(tmp, fieldnames=fieldnames, extrasaction="ignore")
+    w.writeheader()
+
+    for d in db.imu_hf.find(q, {"_id": 0}).sort("t_server", 1):
+        am = d.get("accel_mps2") or [None, None, None]
+        gm = d.get("gyro_radps") or [None, None, None]
+        ts = d.get("t_server")
+        ts = ts.isoformat() if isinstance(ts, datetime) else ts
+        w.writerow({
+            "device_id":     d.get("device_id"),
+            "session_id":    d.get("session_id"),
+            "fw_version":    d.get("fw_version"),
+            "t_ms":          d.get("t_ms"),
+            "t_server_utc":  ts,
+            "ax_raw":        d.get("ax_raw", ""),
+            "ay_raw":        d.get("ay_raw", ""),
+            "az_raw":        d.get("az_raw", ""),
+            "gx_raw":        d.get("gx_raw", ""),
+            "gy_raw":        d.get("gy_raw", ""),
+            "gz_raw":        d.get("gz_raw", ""),
+            "fs":            d.get("fs", ""),
+            "gs":            d.get("gs", ""),
+            "accel_mps2_x":  am[0], "accel_mps2_y": am[1], "accel_mps2_z": am[2],
+            "gyro_radps_x":  gm[0], "gyro_radps_y": gm[1], "gyro_radps_z": gm[2],
+        })
+    tmp.close()
+
+    suf = (session_id or "").replace(":", "-")[-8:]
+    fname = f"tru-track-imuhf-full-{device_id.replace(':', '-')}-{suf}.csv"
+
+    def send_and_delete():
+        with open(tmp.name, 'rb') as f:
+            while True:
+                chunk = f.read(65536)
+                if not chunk:
+                    break
+                yield chunk
+        os.unlink(tmp.name)
+
+    return Response(
+        send_and_delete(),
+        mimetype="text/csv",
+        headers={"Content-Disposition": f'attachment; filename="{fname}"'},
+    )

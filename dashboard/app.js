@@ -488,7 +488,7 @@ const LIVE = {
   _map: null, _mapInit: false, _tile: null,
   _gnssLine: null, _eskfLine: null, _curMarker: null,
   _gnssOn: true, _eskfOn: true,
-  _deviceId: null, _sessionId: '', _liveSessionId: '', _trackLoaded: false,
+  _deviceId: null, _sessionId: '', _liveSessionId: '', _trackLoaded: false, _lastFullFetch: -99,
   _gnssTrack: [], _eskfTrack: [],  // full arrays for replay
   _pollTimer: null,
   _socket: null,
@@ -551,7 +551,7 @@ const LIVE = {
     } catch(e) {}
     this._sessionId = '';
     this._liveSessionId = '';
-    this._trackLoaded = false;
+    this._trackLoaded = false; this._lastFullFetch = -99;
     // Clear map immediately so old session track disappears
     this._gnssTrack = []; this._eskfTrack = [];
     if (this._gnssLine)  { this._map && this._map.removeLayer(this._gnssLine);  this._gnssLine = null; }
@@ -559,7 +559,7 @@ const LIVE = {
     if (this._curMarker) { this._map && this._map.removeLayer(this._curMarker); this._curMarker = null; }
     await this._loadAll();
     this._startPoll();
-    this._connectSocket();
+    // Socket.io disabled — 500ms poll covers live updates reliably
   },
 
   async onSessionChange() {
@@ -572,7 +572,7 @@ const LIVE = {
       if (this._curMarker) { this._map && this._map.removeLayer(this._curMarker); this._curMarker = null; }
     } else {
       // Back to live — restart poll
-      this._trackLoaded = false;
+      this._trackLoaded = false; this._lastFullFetch = -99;
       this._startPoll();
     }
 
@@ -606,7 +606,7 @@ const LIVE = {
         AUTH.apiJSON(`/api/v1/gnss/track/${encodeURIComponent(this._deviceId)}${qs}`),
         AUTH.apiJSON(`/api/v1/eskf/track/${encodeURIComponent(this._deviceId)}${qs}`),
       ]);
-      this._gnssTrack = gnss;
+      this._gnssTrack = gnss;  // full docs with all fields for replay sidebar
       this._eskfTrack = eskf;
       U.setText('replay-pts', gnss.length + ' GNSS · ' + eskf.length + ' ESKF');
       const scrub = document.getElementById('replay-scrub');
@@ -812,8 +812,9 @@ const LIVE = {
 
   exportHF() {
     if (!this._deviceId) return;
-    let url = BASE + `/api/v1/session/export/hf?device_id=${encodeURIComponent(this._deviceId)}`;
-    if (this._sessionId) url += `&session_id=${encodeURIComponent(this._sessionId)}`;
+    let url = BASE + `/api/v1/session/export-imu-hf-full?device_id=${encodeURIComponent(this._deviceId)}`;
+    const sid = this._sessionId || this._liveSessionId || '';
+    if (sid) url += `&session_id=${encodeURIComponent(sid)}`;
     window.location.href = url;
   },
 
@@ -868,46 +869,103 @@ const LIVE = {
   },
 
   _connectSocket() {
-    if (this._socket) { try { this._socket.disconnect(); } catch(e) {} }
-    try {
-      this._socket = io('/', { auth: { token: AUTH.token }, transports: ['websocket'] });
-      this._socket.on('telemetry', data => {
-        if (data.device_id !== this._deviceId) return;
-        this._applyTelemetry(data);
-        // Append live point to track arrays
-        if (data.lat && data.lon) {
-          this._gnssTrack.push({ lat: data.lat, lon: data.lon, t_server: data.t_server });
-          this._drawTracks();
-        }
-        if (data.eskf_lat && data.eskf_lon) {
-          this._eskfTrack.push({ lat: data.eskf_lat, lon: data.eskf_lon, t_server: data.t_server });
-        }
-      });
-    } catch(e) { console.warn('Socket.io not available, polling only'); }
+    // Disabled: WebSocket transport was unreliable (Invalid frame header) and the
+    // 500ms REST poll already provides smooth live updates without duplicate draws.
   },
 
   /* ── Replay ── */
   onScrub(val) {
+    if (!this._sessionId) return;
     this._replayIdx = parseInt(val, 10);
     this._drawTracks(this._replayIdx, this._replayIdx);
     const gPt = this._gnssTrack.filter(p => p.lat && p.lon)[this._replayIdx];
-    if (gPt) U.setText('replay-time-display', U.fmtDT(gPt.t_server));
+    if (gPt) {
+      U.setText('replay-time', U.fmtDT(gPt.t_server));
+      this._applySidebarFromPoint(gPt);
+    }
   },
 
   replayPlay() {
+    if (!this._sessionId) return;  // replay only for historic sessions
     if (this._replayPlaying) return;
     this._replayPlaying = true;
     const gFiltered = this._gnssTrack.filter(p => p.lat && p.lon);
-    const speed = parseInt(document.getElementById('replay-speed').value, 10) || 1;
+    // Use real timestamps for speed — advance by speed * 200ms worth of data per tick
     this._replayTimer = setInterval(() => {
       if (this._replayIdx >= gFiltered.length - 1) { this.replayPause(); return; }
-      this._replayIdx++;
+      const speed = parseInt(document.getElementById('replay-speed').value, 10) || 1;
+      // Skip 'speed' points per tick to simulate faster playback
+      this._replayIdx = Math.min(this._replayIdx + speed, gFiltered.length - 1);
       const scrub = document.getElementById('replay-scrub');
       if (scrub) scrub.value = this._replayIdx;
       this._drawTracks(this._replayIdx, this._replayIdx);
       const gPt = gFiltered[this._replayIdx];
-      if (gPt) U.setText('replay-time-display', U.fmtDT(gPt.t_server));
-    }, Math.round(200 / speed));
+      if (gPt) {
+        U.setText('replay-time', U.fmtDT(gPt.t_server));
+        this._applySidebarFromPoint(gPt);
+      }
+    }, 200);
+  },
+
+  _applySidebarFromPoint(gPt) {
+    if (!gPt) return;
+    try {
+      U.setText('lv-lat',    gPt.lat    != null ? U.r(gPt.lat, 7)         : '—');
+      U.setText('lv-lon',    gPt.lon    != null ? U.r(gPt.lon, 7)         : '—');
+      U.setText('lv-alt',    gPt.alt    != null ? U.r1(gPt.alt) + ' m'   : '—');
+      U.setText('lv-spd',    gPt.speed_mps != null ? U.r1(gPt.speed_mps * 3.6) : (gPt.speed != null ? U.r1(gPt.speed * 3.6) : '—'));
+      U.setText('lv-course', gPt.course != null ? U.r1(gPt.course) + '°' : '—');
+      U.setText('lv-hdop',   gPt.hdop   != null ? U.r2(gPt.hdop)         : '—');
+      U.setText('lv-sats-total', gPt.sats != null ? gPt.sats + ' sats'   : '—');
+
+      // ESKF point at same index
+      const ePts = this._eskfTrack.filter(p => p.lat && p.lon);
+      const eIdx = Math.min(this._replayIdx, ePts.length - 1);
+      if (eIdx >= 0) {
+        const e = ePts[eIdx];
+        U.setText('lv-roll',  e.roll  != null ? U.rad2deg(e.roll)  : '—');
+        U.setText('lv-pitch', e.pitch != null ? U.rad2deg(e.pitch) : '—');
+        U.setText('lv-yaw',   e.yaw   != null ? U.rad2deg(e.yaw)   : '—');
+        const vStr = e.vE != null ? `${U.r2(e.vE)} / ${U.r2(e.vN)} / ${U.r2(e.vU)}` : '—';
+        U.setText('lv-vel', vStr + ' m/s');
+      }
+
+      // Fetch full telemetry every 5 steps for constellations/health/alerts
+      if (!this._lastFullFetch || (this._replayIdx - this._lastFullFetch) >= 5) {
+        this._lastFullFetch = this._replayIdx;
+        const t = encodeURIComponent(gPt.t_server);
+        const sid = this._sessionId ? `&session_id=${encodeURIComponent(this._sessionId)}` : '';
+        AUTH.apiJSON(`/api/telemetry/at/${encodeURIComponent(this._deviceId)}?t=${t}${sid}`)
+          .then(doc => {
+            if (!doc) return;
+            // Apply constellation bars
+            const g = doc.gnss || {};
+            U.setText('lv-sats-total', (g.sats ?? 0) + ' sats');
+            [
+              {id:'gps',  val:g.gps_sv??0,  max:12, col:'green'},
+              {id:'glo',  val:g.glo_sv??0,  max:8,  col:''},
+              {id:'bds',  val:g.bds_sv??0,  max:10, col:''},
+              {id:'gal',  val:g.gal_sv??0,  max:8,  col:''},
+              {id:'irnss',val:g.irnss_sv??0,max:7,  col:'purple'},
+            ].forEach(c => {
+              U.setText('cv-' + c.id, c.val);
+              U.barPct('cb-' + c.id, Math.round(c.val / c.max * 100), c.col);
+            });
+            // Signal health bars
+            const gnssQ = U.gnssQualityPct(g.sats ?? 0, g.hdop);
+            U.setText('hv-gnss', gnssQ + '%');
+            U.barPct('hb-gnss', gnssQ, U.gnssClass(gnssQ));
+            const s = doc.status || {};
+            const rssi = s.lte_rssi_dbm ?? null;
+            U.setText('hv-lte', rssi != null ? rssi + ' dBm' : '—');
+            U.barPct('hb-lte', U.rssiToPercent(rssi), U.lteClass(rssi));
+            const batPct = s.battery_pct ?? null;
+            U.setText('hv-bat', batPct != null ? batPct + '%' : '—');
+            U.barPct('hb-bat', batPct ?? 0, U.batClass(batPct ?? 0));
+            U.setText('kv-rssi', rssi != null ? rssi + ' dBm' : '—');
+          }).catch(() => {});
+      }
+    } catch(e) { /* never crash the scrubber */ }
   },
 
   replayPause() {
@@ -925,7 +983,7 @@ const LIVE = {
     const scrub = document.getElementById('replay-scrub');
     if (scrub) scrub.value = 0;
     this._drawTracks(0, 0);
-    U.setText('replay-time-display', '—');
+    U.setText('replay-time', '—');
   },
 };
 
@@ -1047,7 +1105,7 @@ const SESSIONS = {
 
   exportHF() {
     if (!this._selected || !this._deviceId) return;
-    window.location.href = BASE + `/api/v1/session/export/hf?device_id=${encodeURIComponent(this._deviceId)}&session_id=${encodeURIComponent(this._selected.session_id)}`;
+    window.location.href = BASE + `/api/v1/session/export-imu-hf-full?device_id=${encodeURIComponent(this._deviceId)}&session_id=${encodeURIComponent(this._selected.session_id)}`;
   },
 
   _quickExport(sid) {
