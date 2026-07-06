@@ -1,8 +1,8 @@
 /*
  * ╔══════════════════════════════════════════════════════════════════╗
- * ║              TRU-TRACK  v3.0.0  —  FULL HARDWARE REV           ║
- * ║   ESP32 + A7672S (4G) + L89HA (NavIC GNSS) + MPU6050 (IMU)    ║
- * ║   + MAX17048 (fuel gauge) — Custom PCB, SVNIT Navigation       ║
+ * ║              TRU-TRACK  v3.0.0  —  FULL HARDWARE REV             ║
+ * ║   ESP32 + A7672S (4G) + L89HA (NavIC GNSS) + MPU6050 (IMU)       ║
+ * ║   + MAX17048 (fuel gauge) — Custom PCB, SVNIT Navigation         ║
  * ╚══════════════════════════════════════════════════════════════════╝
  *
  * ARCHITECTURE
