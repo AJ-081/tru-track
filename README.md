@@ -258,7 +258,10 @@ See `DEPLOYMENT.md` for the full guide.
 
 ## Team
 
-Devaam Dalal · Abha Jadav · Vrushti Javeri · Dhruv Shah
-Faculty advisor: Dr. Shweta Shah, Electronics Engineering, SVNIT Surat
+Devaam Dalal, Abha Jadav, Vrushti Javeri, Dhruv Shah Faculty Advisor: Dr. Shweta Shah, Electronics Engineering, SVNIT Surat
 
+ESKF and Website by Abha Jadav ESP code and Backend by Devaam Dalal PCB by Dhruv Shah Ai by Vrusthi
+
+
+## Publication
 **ION GNSS+ 2026** — September 14–18, Orlando, FL
