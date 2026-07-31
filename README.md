@@ -54,4 +54,4 @@ Devaam Dalal, Abha Jadav, Vrushti Javeri, Dhruv Shah
 Faculty Advisor: Dr. Shweta Shah, Electronics Engineering, SVNIT Surat
 
 
-ESKF , Website by Abha Jadav 
+ESKF and Website by Abha Jadav 
