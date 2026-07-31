@@ -1,7 +1,7 @@
 # TRU-TRACK
 
 Real-time vehicle tracking and navigation system with GNSS/IMU sensor fusion.
-Developed at **TruVibe Technologies**, incubated at ASHINE, SVNIT Surat.
+Developed at SVNIT Surat by the team.
 
 **Current mainline: `tt-v3.0.0`** — everything after v3.0.0 is experimental and archived (see [Archived branches](#archived--experimental)).
 
