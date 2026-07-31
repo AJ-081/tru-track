@@ -1,7 +1,7 @@
 # TRU-TRACK
 
 Real-time vehicle tracking and navigation system with GNSS/IMU sensor fusion.
-Developed at **TruVibe Technologies**, incubated at ASHINE, SVNIT Surat.
+Developed by the team at SVNIT Surat.
 
 ## System Overview
 
@@ -9,14 +9,14 @@ TRU-TRACK fuses a multi-constellation GNSS receiver (Quectel L89HA, NavIC/dual-b
 
 ## Hardware
 
-| Component | Role | Interface |
-|---|---|---|
-| ESP32 | Main controller | — |
-| SIMCom A7672S | 4G LTE modem + MQTT | UART2 RX17/TX16 |
+| Component     |          Role        | Interface |
+|---------------|----------------------|-----------|
+| ESP32         | Main controller      | - |
+| SIMCom A7672S | 4G LTE modem + MQTT  | UART2 RX17/TX16 |
 | Quectel L89HA | Dual-band NavIC GNSS | UART1 RX26/TX27 |
-| MPU6050 | 6-axis IMU | I2C SDA21/SCL22 (0x68) |
-| MAX17048 | Battery fuel gauge | I2C SDA21/SCL22 (0x36), ALRT->GPIO4 |
-| LM2596S | 2S LiPo -> 5V buck | — |
+| MPU6050       | 6-axis IMU           | I2C SDA21/SCL22 (0x68) |
+| MAX17048      | Battery fuel gauge   | I2C SDA21/SCL22 (0x36), ALRT->GPIO4 |
+| LM2596S       | 2S LiPo -> 5V buck   | — |
 
 ## Repository Structure
 
@@ -55,3 +55,6 @@ Faculty Advisor: Dr. Shweta Shah, Electronics Engineering, SVNIT Surat
 
 
 ESKF and Website by Abha Jadav 
+ESP code and Backend by Devaam Dalal
+PCB by Dhruv Shah
+Ai by Vrusthi 
