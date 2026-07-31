@@ -52,4 +52,6 @@ TRU-TRACK fuses a multi-constellation GNSS receiver (Quectel L89HA, NavIC/dual-b
 
 Devaam Dalal, Abha Jadav, Vrushti Javeri, Dhruv Shah
 Faculty Advisor: Dr. Shweta Shah, Electronics Engineering, SVNIT Surat
-ION GNSS+ 2026 — September 14-18, Orlando FL
+
+
+ESKF , Website by Abha Jadav 
