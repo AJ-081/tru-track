@@ -1,7 +1,7 @@
 # TRU-TRACK
 
 Real-time vehicle tracking and navigation system with GNSS/IMU sensor fusion.
-Developed at SVNIT Surat by the team.
+Developed at **TruVibe Technologies**, incubated at ASHINE, SVNIT Surat.
 
 **Current mainline: `tt-v3.0.0`** — everything after v3.0.0 is experimental and archived (see [Archived branches](#archived--experimental)).
 
@@ -258,10 +258,7 @@ See `DEPLOYMENT.md` for the full guide.
 
 ## Team
 
-Devaam Dalal, Abha Jadav, Vrushti Javeri, Dhruv Shah Faculty Advisor: Dr. Shweta Shah, Electronics Engineering, SVNIT Surat
+Devaam Dalal · Abha Jadav · Vrushti Javeri · Dhruv Shah
+Faculty advisor: Dr. Shweta Shah, Electronics Engineering, SVNIT Surat
 
-ESKF and Website by Abha Jadav ESP code and Backend by Devaam Dalal PCB by Dhruv Shah Ai by Vrusthi
-
-
-## Publication
 **ION GNSS+ 2026** — September 14–18, Orlando, FL
