@@ -268,6 +268,6 @@ Faculty advisor: Dr. Shweta Shah, Electronics Engineering, SVNIT Surat
 - PCB by Dhruv Shah
 - Ai by Vrusthi
 
-##Publication
+## Publication
 
 **ION GNSS+ 2026** — September 14–18, Orlando, FL
