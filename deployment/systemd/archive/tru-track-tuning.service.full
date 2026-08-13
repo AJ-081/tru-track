@@ -1,0 +1,27 @@
+# /etc/systemd/system/tru-track-tuning.service
+[Unit]
+Description=TRU-TRACK ESKF Tuning Backend
+After=network.target tru-track-backend.service
+
+[Service]
+Type=simple
+User=crl
+WorkingDirectory=/opt/tru-track/tuning
+ExecStart=/opt/tru-track/tuning/venv/bin/gunicorn tuning_backend:app \
+    --bind 127.0.0.1:9001 --workers 2 --timeout 120
+Restart=always
+RestartSec=5
+StandardOutput=append:/var/log/tru-track/tuning.log
+StandardError=append:/var/log/tru-track/tuning.log
+
+[Install]
+WantedBy=multi-user.target
+
+# /etc/systemd/system/tru-track-tuning.service.d/override.conf
+[Service]
+MemoryMax=2G
+MemoryHigh=1800M
+
+# /etc/systemd/system/tru-track-tuning.service.d/secrets.conf
+[Service]
+EnvironmentFile=/etc/tru-track/secrets.env
