@@ -1,0 +1,10 @@
+# TRU-TRACK Mosquitto ACL
+# Ingest service: subscribe to all device topics
+user trutrack_ingest
+topic read nav/#
+
+# ESP32 devices: publish to any nav topic
+user esp32_device
+topic write nav/#
+user test_pub
+topic write nav/#

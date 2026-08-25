@@ -1,0 +1,63 @@
+services:
+  mongo:
+    healthcheck:
+      test: ["CMD", "bash", "-c", "cat < /dev/null > /dev/tcp/localhost/27017"]
+      interval: 3s
+      timeout: 3s
+      retries: 10
+    restart: unless-stopped
+    image: mongo:7.0
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: root
+      MONGO_INITDB_ROOT_PASSWORD: ${MONGO_ROOT_PASSWORD}
+      NAVAPP_PASSWORD: ${NAVAPP_PASSWORD}
+    volumes:
+      - tt_mongo_trial:/data/db
+      - ./mongo-init:/docker-entrypoint-initdb.d:ro
+    ports:
+      - "127.0.0.1:27019:27017"
+
+  mosquitto:
+    restart: unless-stopped
+    image: eclipse-mosquitto:2
+    volumes:
+      - ./mosquitto.conf:/mosquitto/config/mosquitto.conf:ro
+      - ./passwd:/mosquitto/config/passwd:ro
+      - ./acl:/mosquitto/config/acl:ro
+      - tt_mosquitto_trial:/mosquitto/data
+    ports:
+      - "18883:1883"
+
+  backend:
+    restart: unless-stopped
+    build: ../../backend
+    environment:
+      MONGO_URI: mongodb://navapp:${NAVAPP_PASSWORD}@mongo:27017/nav?authSource=admin
+      MONGO_DB: nav
+      PYTHONUNBUFFERED: "1"
+    depends_on:
+      mongo:
+        condition: service_healthy
+    ports:
+      - "127.0.0.1:19000:9000"
+
+  ingest:
+    restart: unless-stopped
+    build: ../../ingest
+    environment:
+      MQTT_HOST: mosquitto
+      MQTT_PORT: "1883"
+      MQTT_USER: trutrack_ingest
+      MQTT_PASS: ${MQTT_INGEST_PASS}
+      MONGO_URI: mongodb://navapp:${NAVAPP_PASSWORD}@mongo:27017/nav?authSource=admin
+      MONGO_DB: nav
+      PYTHONUNBUFFERED: "1"
+    depends_on:
+      mongo:
+        condition: service_healthy
+      mosquitto:
+        condition: service_started
+
+volumes:
+  tt_mongo_trial:
+  tt_mosquitto_trial:
