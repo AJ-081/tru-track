@@ -12,6 +12,7 @@ import io
 import json
 import logging
 import os
+import socket
 import subprocess
 import time
 from datetime import datetime, timedelta, timezone
@@ -592,23 +593,43 @@ def _geojson_export():
 def session_geojson(): return _geojson_export()
 
 # ── SERVER HEALTH ─────────────────────────────────────────────────────────────
+
+def _check_port(host, port, timeout=1):
+    try:
+        with socket.create_connection((host, port), timeout=timeout):
+            return True
+    except Exception:
+        return False
+
 def _server_health():
     mem  = psutil.virtual_memory()
     disk = psutil.disk_usage("/")
     cpu  = psutil.cpu_percent(interval=0.2)
     try:
-        ping = subprocess.check_output(["ping","-c","1","-W","1","1.1.1.1"],
-                                       stderr=subprocess.DEVNULL).decode()
-        latency = ping.split("time=")[1].split(" ms")[0] + " ms"
+        import time as _t; _t0 = _t.monotonic()
+        _check_port("1.1.1.1", 80, timeout=2)
+        latency = f"{round((_t.monotonic()-_t0)*1000,1)} ms"
     except: latency = "unreachable"
     svcs = ["mongod","mosquitto","nginx","tru-track-ingest","tru-track-backend"]
-    svc_status = {}
-    for s in svcs:
-        try:
-            r = subprocess.run(["systemctl","is-active",s],
-                               capture_output=True,text=True,timeout=2)
-            svc_status[s] = (r.stdout.strip() == "active")
-        except: svc_status[s] = False
+    if os.path.exists("/.dockerenv"):
+        _mh = (os.getenv("MONGO_URI","").split("@")[-1].split("/")[0].split(":")[0]) or "mongo"
+        _mqh = os.getenv("MQTT_HOST","mosquitto")
+        _mup = _check_port(_mh, 27017)
+        svc_status = {
+            "mongod":            _mup,
+            "mosquitto":         _check_port(_mqh, 1883),
+            "nginx":             True,
+            "tru-track-ingest":  _mup,
+            "tru-track-backend": True,
+        }
+    else:
+        svc_status = {}
+        for s in svcs:
+            try:
+                r = subprocess.run(["systemctl","is-active",s],
+                                   capture_output=True,text=True,timeout=2)
+                svc_status[s] = (r.stdout.strip() == "active")
+            except: svc_status[s] = False
     core_down = [s for s in ["mongod","tru-track-ingest","tru-track-backend"] if not svc_status.get(s)]
     any_down  = [s for s in svcs if not svc_status.get(s)]
     if core_down or disk.percent > 90: level = "critical"
