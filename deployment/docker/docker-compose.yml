@@ -19,6 +19,8 @@ services:
 
   mosquitto:
     restart: unless-stopped
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     image: eclipse-mosquitto:2
     volumes:
       - ./mosquitto.conf:/mosquitto/config/mosquitto.conf:ro

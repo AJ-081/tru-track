@@ -12,3 +12,5 @@ nohup.out
 *backup*
 *.bak
 *.bak2
+deployment/docker/mosquitto.conf
+deployment/docker/.env
